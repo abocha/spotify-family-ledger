@@ -9,7 +9,13 @@ from ledger.config import settings
 
 
 def _make_engine() -> Engine:
-    url = f"{settings.TURSO_URL}?authToken={settings.TURSO_KEY}"
+    url = settings.TURSO_URL
+    if settings.TURSO_KEY:
+        url = f"{url}?authToken={settings.TURSO_KEY}"
+        
+    if url.startswith("libsql://") or url.startswith("https://") or url.startswith("http://"):
+        url = url.replace("libsql://", "sqlite+libsql://").replace("https://", "sqlite+libsql://https://").replace("http://", "sqlite+libsql://http://")
+    
     engine = create_engine(
         url,
         connect_args={"check_same_thread": False},
@@ -24,7 +30,7 @@ def _make_engine() -> Engine:
 
 
 engine = _make_engine()
-SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
 
 
 @contextmanager

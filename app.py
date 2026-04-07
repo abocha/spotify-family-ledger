@@ -1,32 +1,23 @@
 import streamlit as st
 
-st.set_page_config(page_title="Spotify Family Ledger", layout="wide")
+st.set_page_config(
+    page_title="Spotify Family Ledger",
+    page_icon="🛰️",
+    layout="wide",
+)
 
 st.title("🛰️ Spotify Family Ledger")
 
-# Simple navigation mock
-page = st.sidebar.selectbox("Navigation", ["Home", "Members", "Post Cycle", "Record Payment", "History", "Export"])
+st.markdown(
+    """
+    **Welcome to the Spotify Family Ledger.**
 
-if page == "Home":
-    st.header("Dashboard")
-    st.info("Welcome to the ledger. Check the sidebar to navigate.")
-    
-elif page == "Members":
-    st.header("Members")
-    st.write("Member list and balance overview will go here.")
-
-elif page == "Post Cycle":
-    st.header("Post Cycle")
-    st.write("Review and confirm the next billing cycle.")
-
-elif page == "Record Payment":
-    st.header("Record Payment")
-    st.write("Input member payments here.")
-
-elif page == "History":
-    st.header("History")
-    st.write("Immutable record of cycles and payments.")
-
-elif page == "Export":
-    st.header("Export")
-    st.write("Generate Excel/CSV reports.")
+    Use the sidebar to navigate:
+    - **Home**: Dashboard and next actions.
+    - **Members**: Current roster and balances.
+    - **Post Cycle**: Post the next monthly cycle.
+    - **Record Payment**: Record a received payment.
+    - **History**: View past cycles and payments.
+    - **Export**: Download Excel or CSV data.
+    """
+)

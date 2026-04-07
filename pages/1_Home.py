@@ -1,0 +1,110 @@
+import streamlit as st
+import pandas as pd
+
+from ledger.database import get_db
+from ledger.services import (
+    check_integrity,
+    ensure_forecast_cycles,
+    get_member_balances,
+    get_next_unposted_cycle,
+    get_latest_fx_rate,
+    list_payments,
+)
+
+st.set_page_config(page_title="Home - Spotify Family Ledger", layout="wide")
+
+st.title("Dashboard")
+
+with get_db() as session:
+    # Auto-generate forecast cycles when home page is visited
+    ensure_forecast_cycles(session)
+    
+    # 1. Integrity checks
+    issues = check_integrity(session)
+    if issues:
+        st.error(f"Found {len(issues)} integrity issue(s). Data needs attention.")
+        for issue in issues:
+            st.warning(issue.message)
+
+    # Fetch data
+    balances = get_member_balances(session)
+    next_cycle = get_next_unposted_cycle(session)
+    latest_fx = get_latest_fx_rate(session)
+    recent_payments = list_payments(session, limit=5)
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("Balances")
+    owed_to_owner = sum(b.balance_usd for b in balances if b.balance_usd > 0)
+    st.metric("Total Owed to Owner", f"${owed_to_owner:.2f}")
+
+    if balances:
+        owed_df = pd.DataFrame(
+            [
+                {
+                    "Member": b.display_name,
+                    "Owes (USD)": f"${b.balance_usd:.2f}",
+                }
+                for b in balances
+                if b.balance_usd > 0
+            ]
+        )
+        if not owed_df.empty:
+            st.dataframe(owed_df, hide_index=True)
+        else:
+            st.success("Everyone is paid up!")
+    else:
+        st.info("No members configured yet.")
+
+with col2:
+    st.subheader("Next Action")
+    if next_cycle:
+        st.info(f"Next cycle to post: **{next_cycle.cycle_date.strftime('%B %Y')}**")
+    else:
+        st.success("All forecasted cycles are posted.")
+
+    st.subheader("Latest FX Rate")
+    
+    from ledger.services import fetch_market_rate
+    market_rate = fetch_market_rate()
+    
+    col2a, col2b = st.columns(2)
+    with col2a:
+        if latest_fx:
+            st.metric(
+                "Locked (USD/RUB)",
+                f"{latest_fx.usd_rub:.4f}",
+                help=f"Source: {latest_fx.source} (Date: {latest_fx.rate_date})",
+            )
+        else:
+            st.warning("No FX rates recorded.")
+            
+    with col2b:
+        if market_rate:
+            st.metric(
+                "Market Suggested",
+                f"{market_rate:.4f}",
+                help="Fetched from ExchangeRate-API (v4)",
+            )
+        else:
+            st.metric("Market Suggested", "Unavailable")
+
+st.subheader("Recent Payments")
+if recent_payments:
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "Date": p.payment_date,
+                    "Member": p.display_name,
+                    "RUB": float(p.rub_paid),
+                    "Credit (USD)": float(p.usd_credit),
+                }
+                for p in recent_payments
+            ]
+        ),
+        hide_index=True,
+    )
+else:
+    st.write("No payments recorded yet.")

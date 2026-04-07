@@ -6,3 +6,5 @@ __pycache__
 .ty_cache
 .streamlit/secrets.toml
 .env
+*.db
+*.db-*
