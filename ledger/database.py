@@ -8,23 +8,37 @@ from sqlalchemy.orm import Session, sessionmaker
 from ledger.config import settings
 
 
+def _normalize_database_url(raw_url: str, auth_token: str) -> str:
+    url = raw_url
+    if auth_token:
+        separator = "&" if "?" in url else "?"
+        url = f"{url}{separator}authToken={auth_token}"
+
+    if url.startswith("libsql://"):
+        return url.replace("libsql://", "sqlite+libsql://", 1)
+    if url.startswith("https://"):
+        return url.replace("https://", "sqlite+libsql://https://", 1)
+    if url.startswith("http://"):
+        return url.replace("http://", "sqlite+libsql://http://", 1)
+    return url
+
+
 def _make_engine() -> Engine:
-    url = settings.TURSO_URL
-    if settings.TURSO_KEY:
-        url = f"{url}?authToken={settings.TURSO_KEY}"
-        
-    if url.startswith("libsql://") or url.startswith("https://") or url.startswith("http://"):
-        url = url.replace("libsql://", "sqlite+libsql://").replace("https://", "sqlite+libsql://https://").replace("http://", "sqlite+libsql://http://")
-    
-    engine = create_engine(
-        url,
-        connect_args={"check_same_thread": False},
-    )
-    # Enable WAL mode and foreign keys for every new connection
-    @event.listens_for(engine, "connect")
-    def _set_pragmas(dbapi_conn, _connection_record):
-        dbapi_conn.execute("PRAGMA foreign_keys=ON")
-        dbapi_conn.execute("PRAGMA journal_mode=WAL")
+    url = _normalize_database_url(settings.TURSO_URL, settings.TURSO_KEY)
+    is_local_sqlite = url.startswith("sqlite://") and "+libsql" not in url
+
+    engine_kwargs = {}
+    if is_local_sqlite:
+        engine_kwargs["connect_args"] = {"check_same_thread": False}
+
+    engine = create_engine(url, **engine_kwargs)
+
+    if is_local_sqlite:
+        # Enable local SQLite integrity defaults for each new connection.
+        @event.listens_for(engine, "connect")
+        def _set_pragmas(dbapi_conn, _connection_record):
+            dbapi_conn.execute("PRAGMA foreign_keys=ON")
+            dbapi_conn.execute("PRAGMA journal_mode=WAL")
 
     return engine
 

@@ -2,240 +2,76 @@
 
 ## 1. Project summary
 
-We are building a small owner-facing web app for managing a shared Spotify Family subscription.
+Spotify Family Ledger is a small owner-facing Streamlit app for managing a shared Spotify Family subscription.
 
-The old system lives in the legacy spreadsheet **`spotify семья`** and remains the contractual source of truth up to the cutover date. The new system replaces spreadsheet logic with a proper app that is easier to operate, harder to break, and more honest about FX effects over time.
+It replaces fragile spreadsheet workflows with a narrow, boring, auditable ledger. The app is intentionally not a generic finance product; it is a practical internal tool for one operator managing a small shared subscription.
 
-This is not a generic finance product. It is a narrow internal tool for one owner managing a small group with predictable monthly billing.
+## 2. Source-of-truth boundary
 
----
+- Up to **2026-04-19**, the legacy spreadsheet is the contractual source of truth.
+- From **2026-04-20** onward, this app is the contractual source of truth.
 
-## 2. Problem
+Legacy balances are imported once into `legacy_snapshot` and then treated as frozen opening balances in RUB.
 
-The spreadsheet approach became brittle because it was trying to act as all of these at once:
+## 3. Currency model
 
-- database
-- accounting engine
-- workflow engine
-- owner UI
-- reporting layer
+The ledger is **RUB-first**.
 
-This caused recurring issues:
+- The monthly subscription price is configured in **USD**.
+- When a cycle is posted, the cycle’s USD amount is converted to **RUB** using a locked USD/RUB FX rate for that cycle date.
+- Member payments are recorded directly in **RUB** and create RUB credit 1:1.
+- Display-only USD equivalents may be shown using the latest known FX rate, but they are not accounting truth.
 
-- formula brittleness
-- manual "copy as values" rituals
-- forecast rows mixed with posted history
-- low operator confidence
-- poor owner UX
-- weak error prevention
-- accidental breakage risk
+### Balance formula
 
-What we actually need is a tiny accounting app with a clean ledger model and a simple owner console.
+```text
+balance_rub = legacy_opening_rub + payment_credits_rub - posted_charges_rub
+```
 
----
+Interpretation:
+- positive balance = member has credit
+- negative balance = member owes the owner
 
-## 3. Goal
+## 4. Core workflows
 
-Build an owner-friendly app that lets the owner do only two real actions:
+### A. Forecast cycles
+The app keeps forecast cycles generated ahead of time so the owner can always see the next cycle.
 
-1. **Post the next monthly charge cycle**
-2. **Record a member payment**
+### B. Posting a cycle
+When a cycle is posted:
+1. the cycle date is resolved
+2. the exact USD/RUB rate for that date is ensured or manually provided
+3. active counted members determine the denominator
+4. active billable members receive immutable `posted_charges`
+5. cycle summary fields are locked in RUB
 
-Everything else should be derived from stored facts.
+### C. Recording a payment
+When a payment is recorded:
+1. the owner selects a member
+2. enters payment date and RUB amount
+3. the ledger stores RUB paid and RUB credit directly
+4. payment history becomes part of the permanent balance trail
 
----
+### D. Admin corrections
+Rare edits to posted charges or payments are allowed, but they must write an audit trail with timestamp and reason.
 
-## 4. Desired result
+## 5. Membership rules
 
-The system should:
+Each member has:
+- `active_from`
+- optional `active_to`
+- `counted_in_denominator`
+- `billable_after_cutover`
 
-- import and preserve real legacy state from the spreadsheet
-- freeze legacy balances at cutover
-- track new-system charges from cutover onward
-- convert RUB payments into USD credit using payment-date FX
-- keep posted history immutable
-- separate forecast from ledger
-- show who owes what right now
-- show current RUB equivalent separately from historical RUB payments
-- export owner-friendly snapshots to Excel
+This allows cases like:
+- counted but not billed
+- billed but not counted
+- active for only part of the project’s timeline
 
-The app should feel like a simple admin console, not like spreadsheet maintenance.
-
----
-
-## 5. Contract / accounting rules
-
-### Legacy period
-Up to **2026-04-19**, the legacy spreadsheet is the contract.
-
-Its balances are treated as authoritative, even if the old logic was imperfect.
-
-### New period
-From **2026-04-20** onward, the new app is the contract.
-
-Rules:
-
-- monthly subscription cost is defined in **USD**
-- member debt is tracked in **USD**
-- payments are usually made in **RUB**
-- each payment is converted to **USD credit** using the FX rate on the payment date
-- posted charges and recorded payments must not change later if newer FX data appears
-
-### Important distinction
-The system must keep separate:
-
-1. **Historical RUB actually paid**
-2. **Current RUB equivalent of current debt**
-
-These are different concepts and must never be merged into one ambiguous total.
-
----
-
-## 6. Users
-
-### Primary user
-**Owner / operator**
-
-Needs:
-- low-friction monthly workflow
-- numbers they can trust
-- minimal spreadsheet-like maintenance
-- exportable reporting
-
-### Secondary users
-None inside the app for now.
-
-Family members are external stakeholders, not app users.
-
----
-
-## 7. Core workflows
-
-### A. Monthly posting
-Owner flow:
-1. Open Home
-2. Review the next unposted cycle
-3. Confirm counted members, billed members, denominator, and monthly amounts
-4. Ensure exact FX exists for the cycle date
-5. Click **Post cycle**
-6. App writes immutable posted charge rows
-
-### B. Payment recording
-Owner flow:
-1. Open Record Payment
-2. Select member
-3. Enter payment date and RUB amount
-4. App finds applicable FX
-5. App computes USD credit
-6. Owner confirms and saves
-7. App writes immutable payment row
-
-### C. Review / reporting
-Owner flow:
-1. Open Home or Members
-2. See balances, due now, recent payments, upcoming cycle
-3. Export current snapshot to Excel if needed
-
----
-
-## 8. Non-goals
-
-This project is **not** trying to be:
-
-- a general bookkeeping app
-- a multi-tenant SaaS
-- a family budgeting tool
-- a real-time bank integration product
-- a collaborative editor for multiple operators
-- a complex forecasting platform
-
-Keep it narrow and boring.
-
----
-
-## 9. Constraints
-
-### Product constraints
-- must preserve the legacy contract boundary cleanly
-- must be easy for one owner to operate
-- must reduce spreadsheet-style fragility
-- must support exportable reports
-
-### Technical constraints
-- hosted on **Streamlit Community Cloud**
-- Python app
-- remote persistent database required
-- local SQLite on Community Cloud is not acceptable as production source of truth
-- Turso is the chosen database backend
-
-### Data constraints
-- legacy spreadsheet contains real contractual data
-- imported data may be imperfectly structured and needs normalization
-- dataset is small, but correctness matters more than scale
-
----
-
-## 10. High-level architecture
-
-### UI layer
-- **Streamlit**
-- pages / screens for owner operations and reporting
-
-### App logic layer
-Python services for:
-- posting cycles
-- recording payments
-- balance calculation
-- import / migration
-- export generation
-- validations / integrity checks
-
-### Data layer
-- **Turso** (remote libSQL / SQLite)
-- source of truth for all new-system records
-
-### Export layer
-- Excel export for owner-friendly snapshots
-- CSV export optional
-
----
-
-## 11. Stack
-
-### Runtime / app
-- Python
-- Streamlit
-
-### Database / persistence
-- SQLAlchemy
-- `sqlalchemy-libsql`
-- Alembic
-- Turso
-
-### Validation / config
-- Pydantic
-- `pydantic-settings`
-
-### Data / export
-- pandas
-- XlsxWriter
-
-### Dev quality
-- pytest
-- ruff
-- ty
-
-### Optional later
-- `tenacity` for retry behavior
-- `plotly` for richer charts
-- `openpyxl` if deeper legacy Excel manipulation becomes necessary
-
----
-
-## 12. Data model
+## 6. Data model
 
 ### `members`
-Defines who is in the family system.
+Who exists in the system and how they participate in billing.
 
 Fields:
 - `id`
@@ -247,17 +83,18 @@ Fields:
 - `note`
 
 ### `legacy_snapshot`
-Frozen opening balances from the legacy contract.
+Frozen opening balance imported from the legacy system.
 
 Fields:
 - `id`
 - `member_id`
 - `snapshot_date`
-- `opening_balance_usd`
+- `opening_balance_rub`
+- `source_usd_balance`
 - `source_note`
 
 ### `fx_rates`
-Exact USD/RUB rates by date.
+Stored exact USD/RUB rates by date.
 
 Fields:
 - `rate_date`
@@ -266,40 +103,41 @@ Fields:
 - `imported_at`
 
 ### `charge_cycles`
-One row per monthly cycle.
+One row per cycle.
 
 Fields:
 - `id`
 - `cycle_date`
 - `status` (`forecast`, `posted`)
 - `subscription_usd`
+- `subscription_rub`
 - `counted_active`
 - `billed_active`
-- `usd_per_counted_slot`
-- `total_billed_usd`
-- `owner_subsidy_usd`
+- `total_billed_rub`
+- `owner_subsidy_rub`
 - `fx_locked`
 - `posted_at`
 
 ### `posted_charges`
-Immutable posted member-level charges.
+Immutable member-level charges for posted cycles.
 
 Fields:
 - `id`
 - `cycle_id`
 - `member_id`
 - `charge_date`
-- `counted`
-- `billable`
 - `active_count`
 - `subscription_usd`
 - `charge_usd`
 - `fx_locked`
-- `charge_rub_equivalent`
+- `charge_rub`
+- `billable`
 - `created_at`
+- `edited_at`
+- `edit_reason`
 
 ### `payments`
-Immutable payment records.
+Immutable member payment records.
 
 Fields:
 - `id`
@@ -307,322 +145,52 @@ Fields:
 - `payment_date`
 - `rub_paid`
 - `fx_locked`
-- `usd_credit`
+- `usd_credit` *(legacy field name; currently stores RUB credit in the RUB-first model)*
 - `note`
 - `created_at`
+- `edited_at`
+- `edit_reason`
 
-### Optional later: `adjustments`
-Manual corrections with explicit reason.
+## 7. FX strategy
 
-Possible fields:
-- `id`
-- `member_id`
-- `adjustment_date`
-- `amount_usd`
-- `reason`
-- `created_at`
+- **Provider**: CurrencyBeacon for latest and historical USD/RUB lookups.
+- **Forecast / dashboard use**: latest market mid-rate for rough reference only.
+- **Posted cycles**: historical daily USD/RUB for the cycle date, unless the owner manually overrides the stored FX.
+- **Payments**: recorded directly in RUB; no market FX lookup is required for the accounting entry itself.
 
----
+The values stored in `fx_locked` and the posted RUB amounts remain the ledger’s source of truth.
 
-## 13. Key business rules
+## 8. Business invariants
 
-### Cycle posting
-- a cycle can be posted only once
-- a cycle cannot be posted without a valid FX rate for its date
-- only active counted members affect the denominator
-- only active billable members receive a charge
-- owner subsidy = subscription USD minus total billed USD
+- A cycle can be posted only once.
+- A cycle cannot be posted without a valid FX rate.
+- A cycle cannot be calculated with zero active counted members.
+- Only active counted members affect the denominator.
+- Only active billable members receive posted charges.
+- Manual edits must record an explicit reason.
+- Cycle summary fields must stay consistent with posted charges after edits.
 
-### Payment recording
-- payment FX is looked up by payment date
-- once saved, payment FX and USD credit are fixed
-- missing FX prevents saving the payment unless explicitly overridden
+## 9. Architecture
 
-### Balance calculation
-Per member:
+### UI
+- Streamlit pages for dashboard, members, payments, history, export, and admin edits.
 
-```text
-current_usd_balance = legacy_opening_usd + posted_charges_usd - payment_credits_usd
-````
+### Application layer
+- service modules for balances, cycles, FX, payments, export, integrity, and member validation.
 
-Separately:
+### Persistence
+- SQLAlchemy ORM
+- Alembic migrations
+- local SQLite for development or Turso/libSQL for hosted persistence
 
-```text
-current_rub_equivalent = current_usd_balance * latest_fx
-```
+### Export
+- Excel workbook built with pandas + XlsxWriter
 
-### Integrity rules
+## 10. Operational philosophy
 
-* no duplicate posted cycle
-* no duplicate member charge within a cycle
-* no inactive member charged
-* no payment stored without locked FX
-* no cycle posted without locked FX
-
----
-
-## 14. UX principles
-
-### Owner-first
-
-The owner should not need to understand joins, ledger internals, or database details.
-
-### Facts in, views out
-
-The user enters facts. The app computes everything else.
-
-### Hide plumbing
-
-Internal tables and technical details stay out of the main UX.
-
-### Status-driven UI
-
-Use simple statuses such as:
-
-* `Forecast`
-* `Ready to post`
-* `Posted`
-* `Payment recorded`
-* `Missing FX`
-* `Needs attention`
-
-### Real errors only
-
-Never show fake alarm counts caused by empty rows or technical artifacts.
-
-### Minimal actions
-
-The owner’s normal routine should be:
-
-* check Home
-* post cycle if needed
-* record payments if needed
-* done
-
----
-
-## 15. Screens
-
-### `Home`
-
-Main dashboard:
-
-* current net balance
-* who owes now
-* next cycle status
-* latest FX
-* recent payments
-* real warnings only
-
-### `Members`
-
-Member list with:
-
-* counted / billed status
-* opening balance
-* current balance
-* due now
-* current RUB equivalent
-
-### `Post Cycle`
-
-Focused cycle-posting screen:
-
-* next unposted cycle
-* counted members
-* billed members
-* denominator
-* owner subsidy
-* FX check
-* post action
-
-### `Record Payment`
-
-Payment form:
-
-* member
-* payment date
-* RUB amount
-* auto-found FX
-* resulting USD credit
-* save action
-
-### `History`
-
-Filters over:
-
-* posted cycles
-* posted member charges
-* payments
-
-### `Export`
-
-Download current snapshot to:
-
-* Excel
-* CSV
-
----
-
-## 16. Import / migration plan
-
-### Phase 1 — legacy extraction
-
-Parse the old spreadsheet and extract:
-
-* member list
-* legacy balances as of snapshot
-* payment history if useful
-* available FX history
-* old monthly state if needed for audit
-
-### Phase 2 — legacy freeze
-
-Write frozen `legacy_snapshot` rows using the agreed cutover boundary.
-
-### Phase 3 — initialize new system
-
-Create:
-
-* member records
-* FX table
-* forecast cycles from cutover onward
-
-### Phase 4 — verification
-
-Reconcile:
-
-* imported opening total
-* owner-visible balances
-* member roster
-* first-cycle math after cutover
-
----
-
-## 17. Integrity checks
-
-The app should detect and surface:
-
-* duplicate posted cycle
-* duplicate member charge within a cycle
-* payment missing FX
-* cycle posted without FX
-* inactive member charged
-* active denominator = 0
-* billable member missing charge
-* balance reconciliation mismatch
-
-These should be shown as human-readable warnings, not raw technical counters.
-
----
-
-## 18. Security / operational notes
-
-* secrets stored in Streamlit secrets / environment config
-* Turso connection string and auth token not hardcoded
-* no public write access
-* single-operator model for v1
-* regular exportable backups recommended
-* database is source of truth; Excel exports are reports
-
----
-
-## 19. Success criteria
-
-The project is successful if:
-
-* legacy state is imported correctly
-* owner can post a month in one clean action
-* owner can record a payment in one clean action
-* balances are reproducible and trustworthy
-* posted history never changes retroactively
-* owner no longer needs spreadsheet rituals
-* app exports a clear Excel snapshot on demand
-
----
-
-## 20. MVP scope
-
-### In scope
-
-* legacy snapshot import
-* member management
-* FX table
-* cycle forecasting
-* cycle posting
-* payment recording
-* balances
-* dashboard
-* Excel export
-* integrity checks
-
-### Out of scope for v1
-
-* multi-user auth
-* member self-service portal
-* payment processor integration
-* automatic FX fetching
-* notifications
-* mobile-native UX
-* advanced analytics
-
----
-
-## 21. Build philosophy
-
-This should be a **tiny, boring, explicit internal tool**.
-
-Not clever.
-Not over-abstracted.
-Not "framework architecture astronautics."
-
-The right shape is:
-
-* few tables
-* few services
-* few screens
-* strong invariants
-* easy exports
-* easy trust
-
----
-
-## 22. Suggested repo structure
-
-```text
-spotify-family-ledger/
-├─ app.py
-├─ pages/
-│  ├─ 1_Home.py
-│  ├─ 2_Members.py
-│  ├─ 3_Post_Cycle.py
-│  ├─ 4_Record_Payment.py
-│  ├─ 5_History.py
-│  └─ 6_Export.py
-├─ src/
-│  ├─ db/
-│  │  ├─ models.py
-│  │  ├─ session.py
-│  │  └─ migrations/
-│  ├─ services/
-│  │  ├─ balances.py
-│  │  ├─ cycles.py
-│  │  ├─ payments.py
-│  │  ├─ fx.py
-│  │  └─ exports.py
-│  ├─ schemas/
-│  │  ├─ commands.py
-│  │  └─ settings.py
-│  ├─ repositories/
-│  └─ utils/
-├─ scripts/
-│  ├─ import_legacy.py
-│  └─ seed_fx.py
-├─ tests/
-├─ docs/
-│  └─ design.md
-├─ requirements.txt
-└─ README.md
-```
-
-This is only a suggested starting layout, not a rigid requirement.
+The system should feel like a simple admin console:
+- facts in
+- derived views out
+- no spreadsheet gymnastics
+- no silent accounting magic
+- clear audit trail when humans intervene

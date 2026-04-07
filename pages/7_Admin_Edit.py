@@ -24,21 +24,22 @@ with get_db() as session:
             if payment:
                 with st.form("edit_payment_form"):
                     rub_paid = st.number_input("RUB paid", min_value=0.01, value=float(payment.rub_paid), format="%.2f")
-                    fx = st.number_input("Effective FX (USD/RUB)", min_value=0.000001, value=float(payment.fx_locked), format="%.6f")
                     note = st.text_input("Note", value=payment.note or "")
                     reason = st.text_input("Edit reason", value="")
                     if st.form_submit_button("Save payment edit"):
-                        cmd = EditPaymentCommand(
-                            payment_id=payment.id,
-                            rub_paid=Decimal(str(rub_paid)),
-                            usd_rub_effective=Decimal(str(fx)),
-                            note=note or None,
-                            edit_reason=reason,
-                        )
-                        edit_payment(session, cmd)
-                        session.commit()
-                        st.success("Payment updated.")
-                        st.rerun()
+                        try:
+                            cmd = EditPaymentCommand(
+                                payment_id=payment.id,
+                                rub_paid=Decimal(str(rub_paid)),
+                                note=note or None,
+                                edit_reason=reason,
+                            )
+                            edit_payment(session, cmd)
+                            session.commit()
+                            st.success("Payment updated.")
+                            st.rerun()
+                        except ValueError as e:
+                            st.error(str(e))
         else:
             st.info("No payments found.")
 
@@ -50,19 +51,20 @@ with get_db() as session:
             charge = session.get(PostedCharge, charge_map[selected])
             if charge:
                 with st.form("edit_charge_form"):
-                    charge_usd = st.number_input("Charge USD", min_value=0.000001, value=float(charge.charge_usd), format="%.6f")
-                    fx = st.number_input("Cycle FX (USD/RUB)", min_value=0.000001, value=float(charge.fx_locked), format="%.6f")
+                    charge_rub = st.number_input("Charge RUB", min_value=0.000001, value=float(charge.charge_rub), format="%.2f")
                     reason = st.text_input("Edit reason", value="")
                     if st.form_submit_button("Save charge edit"):
-                        cmd = EditChargeCommand(
-                            charge_id=charge.id,
-                            charge_usd=Decimal(str(charge_usd)),
-                            fx_locked=Decimal(str(fx)),
-                            edit_reason=reason,
-                        )
-                        edit_posted_charge(session, cmd)
-                        session.commit()
-                        st.success("Charge updated.")
-                        st.rerun()
+                        try:
+                            cmd = EditChargeCommand(
+                                charge_id=charge.id,
+                                charge_rub=Decimal(str(charge_rub)),
+                                edit_reason=reason,
+                            )
+                            edit_posted_charge(session, cmd)
+                            session.commit()
+                            st.success("Charge updated.")
+                            st.rerun()
+                        except ValueError as e:
+                            st.error(str(e))
         else:
             st.info("No posted charges found.")

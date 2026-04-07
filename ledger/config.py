@@ -10,6 +10,12 @@ class Settings(BaseSettings):
     TURSO_URL: str = "sqlite:///local.db"
     TURSO_KEY: str = ""
 
+    # Preferred CurrencyBeacon key for USD/RUB market and historical lookups.
+    CURRENCYBEACON_API_KEY: str = ""
+
+    # Deprecated fallback kept only to ease migration from the former FX provider.
+    EXCHANGERATE_API_KEY: str = ""
+
     # Monthly Spotify Family subscription cost in USD
     SUBSCRIPTION_USD: Decimal = Decimal("8.00")
 

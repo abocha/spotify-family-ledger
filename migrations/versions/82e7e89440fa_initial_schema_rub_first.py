@@ -1,8 +1,8 @@
-"""Initial schema
+"""Initial schema RUB-first
 
-Revision ID: 4eec9bcdad53
+Revision ID: 82e7e89440fa
 Revises: 
-Create Date: 2026-04-07 15:34:40.893037
+Create Date: 2026-04-07 21:34:33.012853
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '4eec9bcdad53'
+revision: str = '82e7e89440fa'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -26,11 +26,11 @@ def upgrade() -> None:
     sa.Column('cycle_date', sa.Date(), nullable=False),
     sa.Column('status', sa.String(length=20), nullable=False),
     sa.Column('subscription_usd', sa.Numeric(precision=10, scale=6), nullable=False),
+    sa.Column('subscription_rub', sa.Numeric(precision=12, scale=4), nullable=True),
     sa.Column('counted_active', sa.Integer(), nullable=True),
     sa.Column('billed_active', sa.Integer(), nullable=True),
-    sa.Column('usd_per_counted_slot', sa.Numeric(precision=10, scale=6), nullable=True),
-    sa.Column('total_billed_usd', sa.Numeric(precision=10, scale=6), nullable=True),
-    sa.Column('owner_subsidy_usd', sa.Numeric(precision=10, scale=6), nullable=True),
+    sa.Column('total_billed_rub', sa.Numeric(precision=12, scale=4), nullable=True),
+    sa.Column('owner_subsidy_rub', sa.Numeric(precision=12, scale=4), nullable=True),
     sa.Column('fx_locked', sa.Numeric(precision=12, scale=6), nullable=True),
     sa.Column('posted_at', sa.DateTime(), nullable=True),
     sa.PrimaryKeyConstraint('id'),
@@ -58,7 +58,8 @@ def upgrade() -> None:
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('member_id', sa.Integer(), nullable=False),
     sa.Column('snapshot_date', sa.Date(), nullable=False),
-    sa.Column('opening_balance_usd', sa.Numeric(precision=10, scale=6), nullable=False),
+    sa.Column('opening_balance_rub', sa.Numeric(precision=12, scale=4), nullable=False),
+    sa.Column('source_usd_balance', sa.Numeric(precision=10, scale=6), nullable=True),
     sa.Column('source_note', sa.Text(), nullable=True),
     sa.ForeignKeyConstraint(['member_id'], ['members.id'], ),
     sa.PrimaryKeyConstraint('id'),
@@ -70,9 +71,11 @@ def upgrade() -> None:
     sa.Column('payment_date', sa.Date(), nullable=False),
     sa.Column('rub_paid', sa.Numeric(precision=12, scale=4), nullable=False),
     sa.Column('fx_locked', sa.Numeric(precision=12, scale=6), nullable=False),
-    sa.Column('usd_credit', sa.Numeric(precision=10, scale=6), nullable=False),
+    sa.Column('usd_credit', sa.Numeric(precision=12, scale=4), nullable=False),
     sa.Column('note', sa.Text(), nullable=True),
     sa.Column('created_at', sa.DateTime(), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('edited_at', sa.DateTime(), nullable=True),
+    sa.Column('edit_reason', sa.Text(), nullable=True),
     sa.ForeignKeyConstraint(['member_id'], ['members.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -81,18 +84,19 @@ def upgrade() -> None:
     sa.Column('cycle_id', sa.Integer(), nullable=False),
     sa.Column('member_id', sa.Integer(), nullable=False),
     sa.Column('charge_date', sa.Date(), nullable=False),
-    sa.Column('counted', sa.Boolean(), nullable=False),
-    sa.Column('billable', sa.Boolean(), nullable=False),
     sa.Column('active_count', sa.Integer(), nullable=False),
     sa.Column('subscription_usd', sa.Numeric(precision=10, scale=6), nullable=False),
     sa.Column('charge_usd', sa.Numeric(precision=10, scale=6), nullable=False),
     sa.Column('fx_locked', sa.Numeric(precision=12, scale=6), nullable=False),
-    sa.Column('charge_rub_equivalent', sa.Numeric(precision=12, scale=4), nullable=False),
+    sa.Column('charge_rub', sa.Numeric(precision=12, scale=4), nullable=False),
+    sa.Column('billable', sa.Boolean(), nullable=False),
     sa.Column('created_at', sa.DateTime(), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('edited_at', sa.DateTime(), nullable=True),
+    sa.Column('edit_reason', sa.Text(), nullable=True),
     sa.ForeignKeyConstraint(['cycle_id'], ['charge_cycles.id'], ),
     sa.ForeignKeyConstraint(['member_id'], ['members.id'], ),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('cycle_id', 'member_id', name='uq_charge_cycle_member')
+    sa.UniqueConstraint('cycle_id', 'member_id', name='uq_cycle_member')
     )
     # ### end Alembic commands ###
 

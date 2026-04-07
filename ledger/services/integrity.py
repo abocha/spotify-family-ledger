@@ -2,9 +2,9 @@
 
 from decimal import Decimal, ROUND_HALF_UP
 
-from sqlalchemy.orm import Session
-from sqlalchemy.exc import OperationalError
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
 
 from ledger.models import ChargeCycle, Payment, PostedCharge
 from ledger.schemas import IntegrityIssue
@@ -12,10 +12,13 @@ from ledger.schemas import IntegrityIssue
 
 def _table_exists(session: Session, table_name: str) -> bool:
     try:
-        return session.execute(
-            text("SELECT name FROM sqlite_master WHERE type='table' AND name=:name"),
-            {"name": table_name},
-        ).scalar() is not None
+        return (
+            session.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name=:name"),
+                {"name": table_name},
+            ).scalar()
+            is not None
+        )
     except OperationalError:
         return False
 
@@ -27,7 +30,7 @@ def check_integrity(session: Session) -> list[IntegrityIssue]:
         issues.append(
             IntegrityIssue(
                 severity="warning",
-                message="Ledger tables are not fully initialized yet; integrity checks were skipped for some rows.",
+                message="Ledger tables are not fully initialized yet; some integrity checks were skipped.",
             )
         )
         return issues
@@ -60,43 +63,37 @@ def check_integrity(session: Session) -> list[IntegrityIssue]:
 
     bad_payment_math = 0
     for payment in session.query(Payment).all():
-        if payment.fx_locked is None or payment.usd_credit is None or payment.rub_paid is None:
+        if payment.rub_paid is None or payment.usd_credit is None:
             bad_payment_math += 1
             continue
-        expected = (Decimal(payment.rub_paid) / Decimal(payment.fx_locked)).quantize(
-            Decimal("0.000001"),
-            rounding=ROUND_HALF_UP,
-        )
-        if Decimal(payment.usd_credit).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP) != expected:
+        # In RUB-first, rub_paid must match usd_credit (which is RUB credit)
+        if Decimal(payment.rub_paid).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) != Decimal(payment.usd_credit).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP):
             bad_payment_math += 1
     if bad_payment_math:
         issues.append(
             IntegrityIssue(
                 severity="error",
-                message=f"Found {bad_payment_math} payment(s) whose USD credit does not match locked FX.",
+                message=f"Found {bad_payment_math} payment(s) whose RUB credit does not match recorded RUB paid.",
             )
         )
 
     bad_charge_math = 0
     for charge in session.query(PostedCharge).all():
-        if (
-            charge.fx_locked is None
-            or charge.charge_rub_equivalent is None
-            or charge.charge_usd is None
-        ):
+        if charge.charge_rub is None or charge.fx_locked is None or charge.charge_usd is None:
             bad_charge_math += 1
             continue
+        # Expected charge_rub is charge_usd * fx_locked (rounded to 2 decimal places as in cycles.py)
         expected = (Decimal(charge.charge_usd) * Decimal(charge.fx_locked)).quantize(
-            Decimal("0.0001"),
+            Decimal("0.01"),
             rounding=ROUND_HALF_UP,
         )
-        if Decimal(charge.charge_rub_equivalent).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP) != expected:
+        if Decimal(charge.charge_rub).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) != expected:
             bad_charge_math += 1
     if bad_charge_math:
         issues.append(
             IntegrityIssue(
                 severity="error",
-                message=f"Found {bad_charge_math} posted charge(s) whose RUB equivalent does not match locked FX.",
+                message=f"Found {bad_charge_math} posted charge(s) whose RUB amount is inconsistent with USD reference.",
             )
         )
 

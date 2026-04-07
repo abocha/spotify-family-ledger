@@ -1,6 +1,8 @@
 import streamlit as st
 
 from ledger.auth import get_admin_password_hash, is_admin_password
+from ledger.database import get_db
+from ledger.bootstrap import bootstrap_page
 
 st.set_page_config(
     page_title="Spotify Family Ledger",
@@ -10,6 +12,9 @@ st.set_page_config(
 
 if "mode" not in st.session_state:
     st.session_state.mode = "user"
+
+with get_db() as session:
+    bootstrap_page(session)
 
 st.title("🛰️ Spotify Family Ledger")
 
@@ -21,7 +26,7 @@ if st.session_state.mode == "user":
 
         This is the read-only view.
 
-        Use the sidebar to browse the ledger.
+        The ledger is now self-running: monthly cycle processing happens automatically.
         """
     )
     if not get_admin_password_hash():
@@ -39,7 +44,7 @@ else:
         """
         **Admin mode unlocked.**
 
-        You can now post cycles, add payments, edit members, and change history.
+        The ledger processes cycles automatically; admin mode is now mostly for inspection and emergency maintenance.
         """
     )
     if st.button("Log out"):

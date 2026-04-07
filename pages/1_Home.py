@@ -2,9 +2,9 @@ import streamlit as st
 import pandas as pd
 
 from ledger.database import get_db
+from ledger.bootstrap import bootstrap_page
 from ledger.services import (
     check_integrity,
-    ensure_forecast_cycles,
     fetch_market_rate,
     get_latest_fx_rate,
     get_member_balances,
@@ -15,7 +15,7 @@ from ledger.services import (
 st.title("Dashboard")
 
 with get_db() as session:
-    ensure_forecast_cycles(session)
+    bootstrap_page(session)
     issues = check_integrity(session)
     if issues:
         st.error(f"Found {len(issues)} integrity issue(s). Data needs attention.")
@@ -31,19 +31,20 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("Balances")
-    owed_to_owner = sum((-b.balance_usd for b in balances if b.balance_usd < 0))
-    st.metric("Total Owed to Owner", f"${owed_to_owner:.2f}")
+    # balance_rub is the field name now
+    owed_to_owner = sum((-b.balance_rub for b in balances if b.balance_rub < 0))
+    st.metric("Total Owed to Owner (RUB)", f"{owed_to_owner:.2f}")
 
     if balances:
         owed_df = pd.DataFrame(
             [
                 {
                     "Member": b.display_name,
-                    "Balance (USD)": f"${b.balance_usd:.2f}",
-                    "Status": "has credit" if b.balance_usd > 0 else ("owes owner" if b.balance_usd < 0 else "settled"),
+                    "Balance (RUB)": f"{b.balance_rub:.2f}",
+                    "Status": "has credit" if b.balance_rub > 0 else ("owes owner" if b.balance_rub < 0 else "settled"),
                 }
                 for b in balances
-                if b.balance_usd != 0
+                if b.balance_rub != 0
             ]
         )
         if not owed_df.empty:
@@ -80,8 +81,8 @@ with col2:
                 "Market Suggested (mid-rate)",
                 f"{market_rate:.4f}",
                 help=(
-                    "Fetched from ExchangeRate-API (v4). "
-                    "This is a reference mid-rate; payments use operator-locked effective FX."
+                    "Fetched from CurrencyBeacon. "
+                    "This is a reference mid-rate; payments use RUB directly."
                 ),
             )
         else:
@@ -96,8 +97,7 @@ if recent_payments:
                     "Date": p.payment_date,
                     "Member": p.display_name,
                     "RUB": float(p.rub_paid),
-                    "Effective FX (USD/RUB)": float(p.fx_locked),
-                    "Credit (USD)": float(p.usd_credit),
+                    "Recorded Credit (RUB)": float(p.rub_credit),
                 }
                 for p in recent_payments
             ]

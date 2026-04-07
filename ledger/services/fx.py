@@ -5,6 +5,7 @@ from datetime import date
 from sqlalchemy.orm import Session
 
 from ledger.models import FxRate
+from ledger.services.market_fx import fetch_historical_fx_rate
 
 
 def get_fx_rate(session: Session, rate_date: date) -> FxRate | None:
@@ -14,11 +15,23 @@ def get_fx_rate(session: Session, rate_date: date) -> FxRate | None:
 
 def get_latest_fx_rate(session: Session) -> FxRate | None:
     """Return the most recent FxRate row (for display-only RUB equivalent)."""
-    return (
-        session.query(FxRate)
-        .order_by(FxRate.rate_date.desc())
-        .first()
-    )
+    return session.query(FxRate).order_by(FxRate.rate_date.desc()).first()
+
+
+def ensure_fx_rate(session: Session, rate_date: date) -> FxRate:
+    """Ensure a rate exists for the given date, fetching historical data if needed."""
+    existing = get_fx_rate(session, rate_date)
+    if existing is not None:
+        return existing
+
+    fetched = fetch_historical_fx_rate(rate_date)
+    if fetched is None:
+        raise ValueError(f"CurrencyBeacon returned no USD/RUB rate for {rate_date}.")
+
+    rate = FxRate(rate_date=rate_date, usd_rub=fetched, source="CurrencyBeacon historical")
+    session.add(rate)
+    session.flush()
+    return rate
 
 
 def add_fx_rate(
@@ -49,9 +62,4 @@ def delete_fx_rate(session: Session, rate_date: date) -> None:
 
 def list_fx_rates(session: Session, limit: int = 100) -> list[FxRate]:
     """Return recent FX rates, newest first."""
-    return (
-        session.query(FxRate)
-        .order_by(FxRate.rate_date.desc())
-        .limit(limit)
-        .all()
-    )
+    return session.query(FxRate).order_by(FxRate.rate_date.desc()).limit(limit).all()

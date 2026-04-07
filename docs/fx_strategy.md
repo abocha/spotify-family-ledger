@@ -1,43 +1,40 @@
 # FX Sourcing Options & Strategy
 
-This document outlines the considered options for sourcing USD/RUB exchange rates and the final strategy for the Spotify Family Ledger.
+This document outlines the considered options for sourcing USD/RUB exchange rates and the strategy used by the Spotify Family Ledger.
 
-## 1. Comparison of Sources
+## 1. Comparison of sources
 
 | Source | Type | Effort | Accuracy | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| **ExchangeRate-API** | API | Low | Mid-Market | Reliable, open `v4` endpoint supports RUB natively without authentication required. |
-| **CBR (Central Bank)** | XML | Medium | Official | The official RUB source of truth; requires XML parsing. |
-| **Manual / Effective** | User | Medium | **Absolute** | Based on actual funds moved through Bybit/KZT/Banks. |
+| **CurrencyBeacon** | API | Low | Mid-market | Simple JSON API, historical and latest endpoints, API key required. |
+| **CBR (Central Bank)** | XML / official data | Medium | Official | Official RUB source of truth; requires custom parsing and different series handling. |
+| **Manual / Effective** | User | Medium | **Absolute** | Best for mirroring real funds moved through banks/exchanges instead of market reference data. |
 
-## 2. The "Effective Rate" Problem
+## 2. The “effective rate” problem
 
-Market rates (Google, Frankfurter, etc.) are **Mid-Market Rates**. They represent a theoretical center and are not accessible to retail users.
+Market APIs provide a **mid-market reference rate**. That is useful for estimates and consistent historical posting, but it may still differ from the owner’s real conversion path once spreads and fees are involved.
 
-The owner's actual exchange path:
-`RUB` $\rightarrow$ `USDT (Bybit)` $\rightarrow$ `KZT (Multi-currency account)` $\rightarrow$ `USD`
+Example real path:
+`RUB -> USDT -> KZT account -> USD`
 
-This path involves multiple spreads and fees, meaning the **Effective Rate** (the actual cost to acquire 1 USD) is significantly different from the Market Rate. Using a Market API for a ledger would create a "hidden deficit" where the ledger records a credit that doesn't match the actual cost spent.
+That path can produce an **effective rate** different from the market mid-rate.
 
-## 3. Final Strategy: "Market-Suggested, Effective-Locked"
+## 3. Final strategy: market-suggested, ledger-locked
 
-To maintain "accounting honesty," the app will not rely solely on an automated API.
+### A. Forecasts and dashboard
+- **Source**: CurrencyBeacon latest market rate.
+- **Purpose**: show a ballpark RUB equivalent and current reference FX.
+- **Meaning**: informative only.
 
-### A. For Forecasts & Home Dashboard
-- **Source**: ExchangeRate-API.
-- **Purpose**: Provide a "ballpark" estimate for upcoming charges and current RUB equivalents of debt.
-- **Logic**: "Based on current market trends, this is roughly what is owed."
+### B. Posted cycles
+- **Source**: CurrencyBeacon historical daily USD/RUB rate for the cycle date, unless the owner manually overrides it in the FX log.
+- **Meaning**: once a cycle is posted, the chosen FX is locked in the ledger.
 
-### B. For Posted Cycles (Immutable)
-- **Source**: Market Rate (Suggested) $\rightarrow$ Owner Confirmed.
-- **Logic**: The owner reviews the market rate for the cycle date and confirms/locks it.
+### C. Payments
+- **Source**: owner-entered RUB payment amount.
+- **Meaning**: in the current RUB-first model, payment credit is recorded directly in RUB rather than converted through a market FX lookup.
 
-### C. For Payments (Immutable)
-- **Source**: **Effective Rate (Owner Input)**.
-- **Logic**: Instead of trusting an API, the owner records the actual RUB received and the resulting USD credit gained.
-- **Formula**: $\text{Effective FX} = \frac{\text{RUB Received}}{\text{USD Credit Gained}}$
-- **Result**: The ledger tracks real money, not theoretical market values.
+## 4. Implementation summary
 
-## 4. Summary of Implementation
-- **API**: Use ExchangeRate-API (`v4/latest`) for low-friction estimates.
-- **Truth**: The `fx_locked` column in `posted_charges` and `payments` tables remains the absolute source of truth, regardless of what any API says.
+- **Provider**: CurrencyBeacon for `latest` and `historical` USD/RUB lookups.
+- **Truth**: the `fx_locked` values stored in posted cycles and posted charges remain the ledger’s source of truth, regardless of later market changes.

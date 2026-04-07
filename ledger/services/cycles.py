@@ -1,4 +1,4 @@
-"""Cycle service — forecasting, previewing, and posting charge cycles."""
+"""Cycle service — automatic monthly processing of charges."""
 
 from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
@@ -9,16 +9,10 @@ from sqlalchemy.orm import Session
 from ledger.config import settings
 from ledger.models import ChargeCycle, Member, PostedCharge
 from ledger.schemas import CyclePreview, CycleSummary, EditChargeCommand, MemberChargePreview
-from ledger.services.fx import get_fx_rate
-
-
-# ---------------------------------------------------------------------------
-# Queries
-# ---------------------------------------------------------------------------
+from ledger.services.fx import ensure_fx_rate, get_fx_rate
 
 
 def get_next_unposted_cycle(session: Session) -> ChargeCycle | None:
-    """Return the earliest forecast cycle, or None if all are posted."""
     return (
         session.query(ChargeCycle)
         .filter(ChargeCycle.status == "forecast")
@@ -27,20 +21,182 @@ def get_next_unposted_cycle(session: Session) -> ChargeCycle | None:
     )
 
 
-def get_cycle(session: Session, cycle_id: int) -> ChargeCycle:
+def ensure_forecast_cycles(session: Session) -> list[ChargeCycle]:
+    today = date.today()
+    cutover = settings.CUTOVER_DATE
+    start_date = date(cutover.year, cutover.month, 20)
+
+    existing = session.query(ChargeCycle).order_by(ChargeCycle.cycle_date.desc()).first()
+    if existing:
+        start_date = existing.cycle_date + relativedelta(months=1)
+    elif today >= start_date:
+        start_date = date(today.year, today.month, 20)
+        if today >= start_date:
+            start_date += relativedelta(months=1)
+
+    new_cycles = []
+    needed = settings.FORECAST_HORIZON_MONTHS
+    for i in range(needed + 1 if not existing else needed):
+        target_date = start_date + relativedelta(months=i)
+        if target_date < settings.CUTOVER_DATE:
+            continue
+        cycle = ChargeCycle(
+            cycle_date=target_date,
+            subscription_usd=settings.SUBSCRIPTION_USD,
+            status="forecast",
+        )
+        session.add(cycle)
+        new_cycles.append(cycle)
+
+    if new_cycles:
+        session.commit()
+    return new_cycles
+
+
+def _cycle_members(session: Session, cycle_date: date) -> tuple[list[Member], list[Member], list[Member]]:
+    members = session.query(Member).all()
+    counted = [m for m in members if m.is_active_on(cycle_date) and m.counted_in_denominator]
+    billable = [m for m in members if m.is_active_on(cycle_date) and m.billable_after_cutover]
+    return members, counted, billable
+
+
+def _calculate_cycle_preview(cycle: ChargeCycle, members: list[Member], counted: list[Member], billable: list[Member], fx_rate: Decimal | None) -> CyclePreview:
+    if not counted:
+        raise ValueError(
+            f"Cannot calculate cycle for {cycle.cycle_date}: there are no active counted members."
+        )
+
+    denominator = len(counted)
+    subscription_rub = None
+    rub_per_slot = None
+    total_billed_rub = None
+    owner_subsidy_rub = None
+
+    if fx_rate is not None:
+        subscription_rub = (cycle.subscription_usd * fx_rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        rub_per_slot = (subscription_rub / Decimal(denominator)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        total_billed_rub = (rub_per_slot * Decimal(len(billable))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        owner_subsidy_rub = subscription_rub - total_billed_rub
+
+    member_charges = []
+    for m in members:
+        is_counted = m.is_active_on(cycle.cycle_date) and m.counted_in_denominator
+        is_billable = m.is_active_on(cycle.cycle_date) and m.billable_after_cutover
+        charge_usd = (cycle.subscription_usd / Decimal(denominator)) if is_billable else Decimal(0)
+        charge_rub = rub_per_slot if (is_billable and rub_per_slot is not None) else None
+        member_charges.append(
+            MemberChargePreview(
+                member_id=m.id,
+                display_name=m.display_name,
+                counted=is_counted,
+                billable=is_billable,
+                charge_usd=charge_usd,
+                charge_rub=charge_rub,
+            )
+        )
+
+    return CyclePreview(
+        cycle_id=cycle.id,
+        cycle_date=cycle.cycle_date,
+        subscription_usd=cycle.subscription_usd,
+        subscription_rub=subscription_rub,
+        counted_active=len(counted),
+        billed_active=len(billable),
+        rub_per_slot=rub_per_slot,
+        total_billed_rub=total_billed_rub,
+        owner_subsidy_rub=owner_subsidy_rub,
+        fx_rate=fx_rate,
+        fx_available=fx_rate is not None,
+        member_charges=member_charges,
+    )
+
+
+def preview_cycle(session: Session, cycle_id: int) -> CyclePreview:
     cycle = session.get(ChargeCycle, cycle_id)
+    if not cycle:
+        raise ValueError(f"Cycle with id {cycle_id} not found")
+
+    fx_obj = get_fx_rate(session, cycle.cycle_date)
+    fx_rate = fx_obj.usd_rub if fx_obj else None
+    members, counted, billable = _cycle_members(session, cycle.cycle_date)
+    return _calculate_cycle_preview(cycle, members, counted, billable, fx_rate)
+
+
+def post_cycle(session: Session, cycle_id: int) -> ChargeCycle:
+    """Manual post override (mostly for tests/compatibility)."""
+    cycle = session.get(ChargeCycle, cycle_id)
+    if not cycle:
+        raise ValueError(f"Cycle with id {cycle_id} not found")
+    return run_cycle_for_date(session, cycle.cycle_date)
+
+
+def run_cycle_for_date(session: Session, cycle_date: date) -> ChargeCycle:
+    """Automatic monthly processing for a specific date."""
+    cycle = session.query(ChargeCycle).filter(ChargeCycle.cycle_date == cycle_date).one_or_none()
     if cycle is None:
-        raise ValueError(f"Cycle {cycle_id} not found")
+        cycle = ChargeCycle(cycle_date=cycle_date, subscription_usd=settings.SUBSCRIPTION_USD, status="forecast")
+        session.add(cycle)
+        session.flush()
+
+    if cycle.status != "forecast":
+        return cycle
+
+    fx_obj = ensure_fx_rate(session, cycle_date)
+    fx_rate = fx_obj.usd_rub
+    members, counted, billable = _cycle_members(session, cycle.cycle_date)
+    preview = _calculate_cycle_preview(cycle, members, counted, billable, fx_rate)
+
+    cycle.status = "posted"
+    cycle.posted_at = datetime.now(timezone.utc)
+    cycle.fx_locked = fx_rate
+    cycle.counted_active = preview.counted_active
+    cycle.billed_active = preview.billed_active
+    cycle.subscription_rub = preview.subscription_rub
+    cycle.total_billed_rub = preview.total_billed_rub
+    cycle.owner_subsidy_rub = preview.owner_subsidy_rub
+
+    for mc in preview.member_charges:
+        if mc.billable:
+            session.add(
+                PostedCharge(
+                    cycle_id=cycle.id,
+                    member_id=mc.member_id,
+                    charge_date=cycle.cycle_date,
+                    active_count=preview.counted_active,
+                    subscription_usd=cycle.subscription_usd,
+                    charge_usd=mc.charge_usd,
+                    fx_locked=fx_rate,
+                    charge_rub=mc.charge_rub or Decimal(0),
+                    billable=True,
+                )
+            )
+
+    session.flush()
+    _recompute_cycle_totals(session, cycle)
     return cycle
 
 
-def list_posted_cycles(session: Session) -> list[ChargeCycle]:
-    return (
-        session.query(ChargeCycle)
-        .filter(ChargeCycle.status == "posted")
-        .order_by(ChargeCycle.cycle_date.desc())
-        .all()
-    )
+def run_due_cycles(session: Session, up_to: date | None = None) -> list[ChargeCycle]:
+    if up_to is None:
+        up_to = date.today()
+
+    processed: list[ChargeCycle] = []
+    first_cycle = date(settings.CUTOVER_DATE.year, settings.CUTOVER_DATE.month, 20)
+    if first_cycle < settings.CUTOVER_DATE:
+        first_cycle += relativedelta(months=1)
+
+    cycle_date = first_cycle
+    while cycle_date <= up_to:
+        processed.append(run_cycle_for_date(session, cycle_date))
+        cycle_date += relativedelta(months=1)
+
+    session.commit()
+    return processed
+
+
+def process_backlog(session: Session) -> list[ChargeCycle]:
+    """On startup, catch up any monthly cycles we missed while the app was offline."""
+    return run_due_cycles(session, up_to=date.today())
 
 
 def list_all_cycles(session: Session) -> list[CycleSummary]:
@@ -48,195 +204,32 @@ def list_all_cycles(session: Session) -> list[CycleSummary]:
     return [CycleSummary.model_validate(c) for c in cycles]
 
 
-# ---------------------------------------------------------------------------
-# Forecast generation
-# ---------------------------------------------------------------------------
-
-
-def ensure_forecast_cycles(session: Session) -> list[ChargeCycle]:
-    """Create forecast cycles up to FORECAST_HORIZON_MONTHS ahead if missing.
-
-    Cycles are anchored to the 20th of each month starting from CUTOVER_DATE.
-    Returns the list of newly created cycles.
-    """
-    horizon = settings.FORECAST_HORIZON_MONTHS
-    cutover = settings.CUTOVER_DATE
-    today = date.today()
-    start = max(cutover, date(today.year, today.month, 1))
-    created = []
-
-    for i in range(horizon + 1):
-        month_start = start + relativedelta(months=i)
-        cycle_date = date(month_start.year, month_start.month, 20)
-
-        existing = session.query(ChargeCycle).filter(ChargeCycle.cycle_date == cycle_date).first()
-        if existing is None:
-            cycle = ChargeCycle(
-                cycle_date=cycle_date,
-                status="forecast",
-                subscription_usd=settings.SUBSCRIPTION_USD,
-            )
-            session.add(cycle)
-            created.append(cycle)
-
-    return created
-
-
-# ---------------------------------------------------------------------------
-# Preview
-# ---------------------------------------------------------------------------
-
-
-def preview_cycle(session: Session, cycle_id: int) -> CyclePreview:
-    """Compute what posting this cycle would produce, without writing anything."""
-    cycle = get_cycle(session, cycle_id)
-    if cycle.status == "posted":
-        raise ValueError(f"Cycle {cycle.cycle_date} is already posted.")
-
-    active_members = _active_members_on(session, cycle.cycle_date)
-    counted = [m for m in active_members if m.counted_in_denominator]
-    billable = [m for m in active_members if m.billable_after_cutover]
-
-    denominator = len(counted)
-    if denominator == 0:
-        raise ValueError(
-            f"No active counted members on {cycle.cycle_date}. Cannot compute charges."
-        )
-
-    per_slot = (cycle.subscription_usd / Decimal(denominator)).quantize(
-        Decimal("0.000001"), rounding=ROUND_HALF_UP
-    )
-    total_billed = (per_slot * Decimal(len(billable))).quantize(
-        Decimal("0.000001"), rounding=ROUND_HALF_UP
-    )
-    owner_subsidy = cycle.subscription_usd - total_billed
-
-    fx = get_fx_rate(session, cycle.cycle_date)
-    fx_rate = fx.usd_rub if fx else None
-
-    member_charges = []
-    for m in active_members:
-        is_billable = m.billable_after_cutover
-        charge_usd = per_slot if is_billable else Decimal("0")
-        rub_eq = None
-        if fx_rate is not None:
-            rub_eq = (charge_usd * fx_rate).quantize(Decimal("0.01"))
-        member_charges.append(
-            MemberChargePreview(
-                member_id=m.id,
-                display_name=m.display_name,
-                counted=m.counted_in_denominator,
-                billable=is_billable,
-                charge_usd=charge_usd,
-                charge_rub_equivalent=rub_eq,
-            )
-        )
-
-    return CyclePreview(
-        cycle_id=cycle_id,
-        cycle_date=cycle.cycle_date,
-        subscription_usd=cycle.subscription_usd,
-        counted_active=denominator,
-        billed_active=len(billable),
-        usd_per_counted_slot=per_slot,
-        total_billed_usd=total_billed,
-        owner_subsidy_usd=owner_subsidy,
-        fx_rate=fx_rate,
-        fx_available=fx is not None,
-        member_charges=member_charges,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Posting
-# ---------------------------------------------------------------------------
-
-
-def post_cycle(session: Session, cycle_id: int) -> list[PostedCharge]:
-    """Post a forecast cycle. Writes immutable posted_charges rows."""
-    cycle = get_cycle(session, cycle_id)
-
-    if cycle.status == "posted":
-        raise ValueError(f"{cycle.cycle_date.strftime('%B %Y')} cycle is already posted.")
-
-    fx = get_fx_rate(session, cycle.cycle_date)
-    if fx is None:
-        raise ValueError(
-            f"No FX rate exists for {cycle.cycle_date}. "
-            "Add the rate before posting this cycle."
-        )
-
-    active_members = _active_members_on(session, cycle.cycle_date)
-    counted = [m for m in active_members if m.counted_in_denominator]
-    billable = [m for m in active_members if m.billable_after_cutover]
-
-    denominator = len(counted)
-    if denominator == 0:
-        raise ValueError(
-            f"No active counted members on {cycle.cycle_date}. Cannot post cycle."
-        )
-
-    per_slot = (cycle.subscription_usd / Decimal(denominator)).quantize(
-        Decimal("0.000001"), rounding=ROUND_HALF_UP
-    )
-    total_billed = (per_slot * Decimal(len(billable))).quantize(
-        Decimal("0.000001"), rounding=ROUND_HALF_UP
-    )
-    owner_subsidy = cycle.subscription_usd - total_billed
-
-    charges: list[PostedCharge] = []
-    for m in active_members:
-        is_billable = m.billable_after_cutover
-        charge_usd = per_slot if is_billable else Decimal("0")
-        rub_eq = (charge_usd * fx.usd_rub).quantize(Decimal("0.0001"))
-
-        charge = PostedCharge(
-            cycle_id=cycle_id,
-            member_id=m.id,
-            charge_date=cycle.cycle_date,
-            counted=m.counted_in_denominator,
-            billable=is_billable,
-            active_count=denominator,
-            subscription_usd=cycle.subscription_usd,
-            charge_usd=charge_usd,
-            fx_locked=fx.usd_rub,
-            charge_rub_equivalent=rub_eq,
-        )
-        session.add(charge)
-        charges.append(charge)
-
-    cycle.status = "posted"
-    cycle.counted_active = denominator
-    cycle.billed_active = len(billable)
-    cycle.usd_per_counted_slot = per_slot
-    cycle.total_billed_usd = total_billed
-    cycle.owner_subsidy_usd = owner_subsidy
-    cycle.fx_locked = fx.usd_rub
-    cycle.posted_at = datetime.now(timezone.utc)
-
-    return charges
-
-
 def edit_posted_charge(session: Session, cmd: EditChargeCommand) -> PostedCharge:
     charge = session.get(PostedCharge, cmd.charge_id)
-    if charge is None:
-        raise ValueError(f"Posted charge {cmd.charge_id} not found")
-    charge.charge_usd = cmd.charge_usd
-    charge.fx_locked = cmd.fx_locked
-    charge.charge_rub_equivalent = (cmd.charge_usd * cmd.fx_locked).quantize(
-        Decimal("0.0001")
-    )
+    if not charge:
+        raise ValueError(f"Charge with id {cmd.charge_id} not found")
+
+    charge.charge_rub = cmd.charge_rub
     charge.edited_at = datetime.now(timezone.utc)
     charge.edit_reason = cmd.edit_reason
+    session.flush()
+    _recompute_cycle_totals(session, charge.cycle)
     return charge
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+def _recompute_cycle_totals(session: Session, cycle: ChargeCycle) -> None:
+    """Keep denormalized cycle summary fields aligned with posted charges."""
+    session.flush()
 
+    billable_charges = [charge for charge in cycle.charges if charge.billable]
+    total_billed_rub = sum((charge.charge_rub for charge in billable_charges), Decimal(0)).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
 
-def _active_members_on(session: Session, d: date) -> list[Member]:
-    """Return all members active on the given date, ordered by name."""
-    members = session.query(Member).order_by(Member.display_name).all()
-    return [m for m in members if m.is_active_on(d)]
+    cycle.billed_active = len(billable_charges)
+    cycle.total_billed_rub = total_billed_rub
+
+    if cycle.subscription_rub is not None:
+        cycle.owner_subsidy_rub = (cycle.subscription_rub - total_billed_rub).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )

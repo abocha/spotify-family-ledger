@@ -30,12 +30,6 @@ with get_db() as session:
             selected_name = st.selectbox("Member", list(member_map.keys()))
             payment_date = st.date_input("Payment Date", date.today())
             rub_paid = st.number_input("Amount (RUB)", min_value=0.01, step=100.0, format="%.2f")
-            usd_rub_effective = st.number_input(
-                "Effective FX (USD/RUB) — operator locked",
-                min_value=0.000001,
-                step=0.1,
-                format="%.6f",
-            )
             note = st.text_input("Note (optional)")
 
             preview_submit = st.form_submit_button("Preview payment")
@@ -45,7 +39,6 @@ with get_db() as session:
                     member_id=member_map[selected_name],
                     payment_date=payment_date,
                     rub_paid=Decimal(str(rub_paid)),
-                    usd_rub_effective=Decimal(str(usd_rub_effective)),
                     note=" ".join(note.split()) if note else None,
                 )
 
@@ -54,8 +47,10 @@ with get_db() as session:
                     st.session_state.payment_preview = preview
                     st.session_state.payment_cmd = cmd
                     needs_rerun = True
+                except ValueError as e:
+                    st.error(str(e))
                 except Exception as e:
-                    st.error(f"Error: {str(e)}")
+                    st.error(f"Unexpected error: {str(e)}")
     else:
         preview = st.session_state.payment_preview
         cmd = st.session_state.payment_cmd
@@ -65,8 +60,7 @@ with get_db() as session:
         st.info(f"**Member:** {preview.display_name}")
         st.info(f"**Payment Date:** {preview.payment_date}")
         st.info(f"**RUB Paid:** {preview.rub_paid}")
-        st.info(f"**Effective FX (USD/RUB):** {preview.fx_rate} USD/RUB")
-        st.success(f"**USD Credit to be applied:** ${preview.usd_credit:.4f}")
+        st.success(f"**RUB Credit to be applied:** {preview.rub_credit:.2f}")
 
         note_text = cmd.note or ""
         if note_text:
@@ -90,12 +84,14 @@ with get_db() as session:
                     try:
                         payment = record_payment(session, cmd)
                         session.commit()
-                        st.toast(f"Payment recorded! Member credited with ${payment.usd_credit:.4f}")
+                        st.toast(f"Payment recorded! Member credited with {payment.usd_credit:.2f} RUB")
                         st.session_state.payment_preview = None
                         st.session_state.payment_cmd = None
                         needs_rerun = True
+                    except ValueError as e:
+                        st.error(str(e))
                     except Exception as e:
-                        st.error(f"Error: {str(e)}")
+                        st.error(f"Unexpected error: {str(e)}")
 
 if needs_rerun:
     st.rerun()
