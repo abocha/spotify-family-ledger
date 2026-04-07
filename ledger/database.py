@@ -8,39 +8,39 @@ from sqlalchemy.orm import Session, sessionmaker
 from ledger.config import settings
 
 
-def _normalize_database_url(raw_url: str, auth_token: str) -> str:
-    url = raw_url
-    if auth_token:
-        separator = "&" if "?" in url else "?"
-        url = f"{url}{separator}authToken={auth_token}"
-
-    if url.startswith("libsql://"):
-        return url.replace("libsql://", "sqlite+libsql://", 1)
-    if url.startswith("https://"):
-        return url.replace("https://", "sqlite+libsql://https://", 1)
-    if url.startswith("http://"):
-        return url.replace("http://", "sqlite+libsql://http://", 1)
-    return url
-
-
 def _make_engine() -> Engine:
-    url = _normalize_database_url(settings.TURSO_URL, settings.TURSO_KEY)
-    is_local_sqlite = url.startswith("sqlite://") and "+libsql" not in url
+    raw_url = settings.TURSO_URL.strip()
+    token = settings.TURSO_KEY.strip()
 
-    engine_kwargs = {}
-    if is_local_sqlite:
-        engine_kwargs["connect_args"] = {"check_same_thread": False}
+    # Remote Turso / libSQL
+    if raw_url.startswith("libsql://"):
+        connect_args = {}
+        if token:
+            connect_args["auth_token"] = token
 
-    engine = create_engine(url, **engine_kwargs)
+        return create_engine(
+            f"sqlite+{raw_url}?secure=true",
+            connect_args=connect_args,
+        )
 
-    if is_local_sqlite:
-        # Enable local SQLite integrity defaults for each new connection.
+    # Local SQLite
+    if raw_url.startswith("sqlite:///"):
+        engine = create_engine(
+            raw_url,
+            connect_args={"check_same_thread": False},
+        )
+
         @event.listens_for(engine, "connect")
         def _set_pragmas(dbapi_conn, _connection_record):
             dbapi_conn.execute("PRAGMA foreign_keys=ON")
             dbapi_conn.execute("PRAGMA journal_mode=WAL")
 
-    return engine
+        return engine
+
+    raise ValueError(
+        "TURSO_URL must start with either 'sqlite:///' for local dev "
+        "or 'libsql://' for a remote Turso database."
+    )
 
 
 engine = _make_engine()
@@ -49,14 +49,6 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expi
 
 @contextmanager
 def get_db() -> Generator[Session, None, None]:
-    """Yield a database session.
-
-    IMPORTANT:
-    - Pages/services should explicitly call `session.commit()` for writes.
-    - This context manager should *only* roll back on exceptions.
-
-    This avoids fragile interactions with Streamlit's rerun semantics.
-    """
     session = SessionLocal()
     try:
         yield session
@@ -68,5 +60,4 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def get_engine() -> Engine:
-    """Return the engine — used by Alembic."""
     return engine

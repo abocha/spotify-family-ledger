@@ -5,24 +5,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=".env",  # optional fallback for non-Streamlit CLI use
+        env_file_encoding="utf-8",
+    )
 
     TURSO_URL: str = "sqlite:///local.db"
     TURSO_KEY: str = ""
 
-    # Preferred CurrencyBeacon key for USD/RUB market and historical lookups.
     CURRENCYBEACON_API_KEY: str = ""
-
-    # Deprecated fallback kept only to ease migration from the former FX provider.
     EXCHANGERATE_API_KEY: str = ""
 
-    # Monthly Spotify Family subscription cost in USD
     SUBSCRIPTION_USD: Decimal = Decimal("8.00")
-
-    # From 2026-04-20 onward, this app is the contractual source of truth
     CUTOVER_DATE: date = date(2026, 4, 20)
-
-    # How many months ahead to keep forecast cycles generated
     FORECAST_HORIZON_MONTHS: int = 6
 
 
