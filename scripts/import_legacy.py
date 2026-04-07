@@ -3,7 +3,6 @@ import sys
 from datetime import date
 from decimal import Decimal
 
-import pandas as pd
 
 sys.path.insert(0, os.getcwd())
 from ledger.config import settings

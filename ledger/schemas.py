@@ -15,6 +15,10 @@ class RecordPaymentCommand(BaseModel):
     member_id: int
     payment_date: date
     rub_paid: Decimal
+    # Effective RUB/USD logic is inherently user-specific when trading in bulk
+    # across multiple legs/exchanges. We therefore allow the operator to lock
+    # an effective rate for this payment.
+    usd_rub_effective: Decimal
     note: str | None = None
 
     @field_validator("rub_paid")
@@ -23,6 +27,63 @@ class RecordPaymentCommand(BaseModel):
         if v <= 0:
             raise ValueError("RUB amount must be positive")
         return v
+
+    @field_validator("usd_rub_effective")
+    @classmethod
+    def effective_rate_must_be_positive(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("Effective FX (USD/RUB) must be positive")
+        return v
+
+
+class EditPaymentCommand(BaseModel):
+    payment_id: int
+    rub_paid: Decimal
+    usd_rub_effective: Decimal
+    note: str | None = None
+    edit_reason: str
+
+    @field_validator("rub_paid")
+    @classmethod
+    def rub_must_be_positive(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("RUB amount must be positive")
+        return v
+
+    @field_validator("usd_rub_effective")
+    @classmethod
+    def effective_rate_must_be_positive(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("Effective FX (USD/RUB) must be positive")
+        return v
+
+    @field_validator("edit_reason")
+    @classmethod
+    def reason_must_exist(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Edit reason is required")
+        return " ".join(v.split())
+
+
+class EditChargeCommand(BaseModel):
+    charge_id: int
+    charge_usd: Decimal
+    fx_locked: Decimal
+    edit_reason: str
+
+    @field_validator("charge_usd", "fx_locked")
+    @classmethod
+    def positive_decimal(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("Values must be positive")
+        return v
+
+    @field_validator("edit_reason")
+    @classmethod
+    def reason_must_exist(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Edit reason is required")
+        return " ".join(v.split())
 
 
 class PostCycleCommand(BaseModel):
@@ -80,6 +141,7 @@ class PaymentPreview(BaseModel):
     display_name: str
     payment_date: date
     rub_paid: Decimal
+    # For payments, this is the operator-locked effective USD/RUB.
     fx_rate: Decimal | None
     fx_available: bool
     usd_credit: Decimal | None

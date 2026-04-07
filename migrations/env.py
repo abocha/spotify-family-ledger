@@ -1,9 +1,9 @@
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
-
 from alembic import context
+
+from ledger.database import get_engine
+from ledger.models import Base
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -16,10 +16,6 @@ if config.config_file_name is not None:
 
 # add your model's MetaData object here
 # for 'autogenerate' support
-from ledger.models import Base
-from ledger.database import get_engine
-from ledger.config import settings
-
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,

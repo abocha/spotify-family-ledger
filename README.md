@@ -48,6 +48,7 @@ From **2026-04-20** onward, this app is the contractual source of truth.
 - Member debt is tracked in **USD**
 - Payments are usually made in **RUB**
 - Each RUB payment is converted into **USD credit** using the FX rate for the payment date
+- Positive balance means the member has credit; negative balance means the member owes the owner
 - Posted charges and recorded payments are **immutable**
 - Forecasts may change; posted history may not
 
@@ -56,7 +57,7 @@ From **2026-04-20** onward, this app is the contractual source of truth.
 The system must keep these separate:
 
 1. **Historical RUB actually paid**
-2. **Current RUB equivalent of current debt**
+2. **Current RUB equivalent of current balance**
 
 These are different numbers and must never be merged into one ambiguous total.
 
@@ -82,7 +83,7 @@ The owner:
 - clicks **Save payment**
 
 The app:
-- looks up FX for the payment date
+- uses the operator-entered effective FX
 - locks FX and USD credit
 - writes an immutable payment row
 - updates balances

@@ -7,8 +7,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    TURSO_URL: str
-    TURSO_KEY: str
+    TURSO_URL: str = "sqlite:///local.db"
+    TURSO_KEY: str = ""
 
     # Monthly Spotify Family subscription cost in USD
     SUBSCRIPTION_USD: Decimal = Decimal("8.00")

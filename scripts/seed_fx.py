@@ -1,7 +1,6 @@
 import sys
 import os
 from datetime import date
-from decimal import Decimal
 
 sys.path.insert(0, os.getcwd())
 from ledger.database import SessionLocal

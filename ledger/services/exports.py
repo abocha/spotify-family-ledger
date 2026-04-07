@@ -43,7 +43,7 @@ def build_export_workbook(session: Session) -> io.BytesIO:
                 "Charges USD": float(b.posted_charges_usd),
                 "Credits USD": float(b.payment_credits_usd),
                 "Current USD Balance": float(b.balance_usd),
-                "Current RUB Equivalent": float(b.balance_rub_equivalent) if b.balance_rub_equivalent is not None else None,
+                "Current RUB Equivalent (latest reference FX)": float(b.balance_rub_equivalent) if b.balance_rub_equivalent is not None else None,
             }
             for b in balances
         ]
@@ -52,30 +52,30 @@ def build_export_workbook(session: Session) -> io.BytesIO:
     df_payments = pd.DataFrame(
         [
             {
-                "Date": p.Payment.payment_date,
-                "Member": p.Member.display_name,
-                "RUB Paid": float(p.Payment.rub_paid),
-                "FX Locked": float(p.Payment.fx_locked),
-                "USD Credit": float(p.Payment.usd_credit),
-                "Note": p.Payment.note,
+                "Date": payment.payment_date,
+                "Member": member.display_name,
+                "RUB Paid": float(payment.rub_paid),
+                "Effective FX (USD/RUB)": float(payment.fx_locked),
+                "USD Credit": float(payment.usd_credit),
+                "Note": payment.note,
             }
-            for p in payments
+            for payment, member in payments
         ]
     )
 
     df_charges = pd.DataFrame(
         [
             {
-                "Cycle": p.ChargeCycle.cycle_date,
-                "Member": p.Member.display_name,
-                "Denominator": p.PostedCharge.active_count,
-                "Subscription USD": float(p.PostedCharge.subscription_usd),
-                "Charge USD": float(p.PostedCharge.charge_usd),
-                "FX Locked": float(p.PostedCharge.fx_locked),
-                "RUB Equivalent": float(p.PostedCharge.charge_rub_equivalent),
-                "Billable": "Yes" if p.PostedCharge.billable else "No",
+                "Cycle": cycle.cycle_date,
+                "Member": member.display_name,
+                "Denominator": charge.active_count,
+                "Subscription USD": float(charge.subscription_usd),
+                "Charge USD": float(charge.charge_usd),
+                "FX Locked (cycle fx)": float(charge.fx_locked),
+                "RUB Equivalent": float(charge.charge_rub_equivalent),
+                "Billable": "Yes" if charge.billable else "No",
             }
-            for p in posted_charges
+            for charge, member, cycle in posted_charges
         ]
     )
 

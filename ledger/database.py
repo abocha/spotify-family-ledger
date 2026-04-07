@@ -1,7 +1,7 @@
 from contextlib import contextmanager
 from typing import Generator
 
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -35,11 +35,17 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expi
 
 @contextmanager
 def get_db() -> Generator[Session, None, None]:
-    """Context manager yielding a database session with auto rollback on error."""
+    """Yield a database session.
+
+    IMPORTANT:
+    - Pages/services should explicitly call `session.commit()` for writes.
+    - This context manager should *only* roll back on exceptions.
+
+    This avoids fragile interactions with Streamlit's rerun semantics.
+    """
     session = SessionLocal()
     try:
         yield session
-        session.commit()
     except Exception:
         session.rollback()
         raise

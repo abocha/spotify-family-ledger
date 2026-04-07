@@ -1,11 +1,14 @@
 """Balance calculation service.
 
-Formula per member:
-    balance_usd = legacy_opening_usd + posted_charges_usd - payment_credits_usd
+Bank-style sign convention:
+    balance_usd = payment_credits_usd - legacy_opening_usd - posted_charges_usd
 
+Positive balance means the member has credit.
+Negative balance means the member owes the owner.
 RUB equivalent is display-only and always uses the latest FX rate.
 """
 
+from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import func
@@ -61,7 +64,7 @@ def _compute_balance(
     )
     payment_credits_usd = Decimal(str(payments_result))
 
-    balance_usd = legacy_opening_usd + posted_charges_usd - payment_credits_usd
+    balance_usd = payment_credits_usd - legacy_opening_usd - posted_charges_usd
 
     balance_rub_equivalent: Decimal | None = None
     if latest_fx_rate is not None:
@@ -69,7 +72,6 @@ def _compute_balance(
             Decimal("0.01")
         )
 
-    from datetime import date
     today = date.today()
 
     return MemberBalance(
@@ -87,9 +89,9 @@ def _compute_balance(
 
 
 def get_total_owed_usd(session: Session) -> Decimal:
-    """Sum of all positive member balances (what's owed to the owner)."""
+    """Sum of all negative member balances, expressed as a positive amount owed to the owner."""
     balances = get_member_balances(session)
     return sum(
-        (b.balance_usd for b in balances if b.balance_usd > 0),
+        (-b.balance_usd for b in balances if b.balance_usd < 0),
         Decimal("0"),
     )

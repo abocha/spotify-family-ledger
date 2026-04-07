@@ -16,7 +16,12 @@ dependencies = [
     "streamlit>=1.36.0",
     "ty>=0.0.29",
     "xlsxwriter>=3.2.6",
+    "python-dateutil>=2.9.0",
+    "bcrypt>=5.0.0",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = "."
 
 [dependency-groups]
 dev = ["openpyxl>=3.1.5"]

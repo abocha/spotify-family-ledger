@@ -5,28 +5,23 @@ from ledger.database import get_db
 from ledger.services import (
     check_integrity,
     ensure_forecast_cycles,
+    fetch_market_rate,
+    get_latest_fx_rate,
     get_member_balances,
     get_next_unposted_cycle,
-    get_latest_fx_rate,
     list_payments,
 )
-
-st.set_page_config(page_title="Home - Spotify Family Ledger", layout="wide")
 
 st.title("Dashboard")
 
 with get_db() as session:
-    # Auto-generate forecast cycles when home page is visited
     ensure_forecast_cycles(session)
-    
-    # 1. Integrity checks
     issues = check_integrity(session)
     if issues:
         st.error(f"Found {len(issues)} integrity issue(s). Data needs attention.")
         for issue in issues:
             st.warning(issue.message)
 
-    # Fetch data
     balances = get_member_balances(session)
     next_cycle = get_next_unposted_cycle(session)
     latest_fx = get_latest_fx_rate(session)
@@ -36,7 +31,7 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("Balances")
-    owed_to_owner = sum(b.balance_usd for b in balances if b.balance_usd > 0)
+    owed_to_owner = sum((-b.balance_usd for b in balances if b.balance_usd < 0))
     st.metric("Total Owed to Owner", f"${owed_to_owner:.2f}")
 
     if balances:
@@ -44,16 +39,17 @@ with col1:
             [
                 {
                     "Member": b.display_name,
-                    "Owes (USD)": f"${b.balance_usd:.2f}",
+                    "Balance (USD)": f"${b.balance_usd:.2f}",
+                    "Status": "has credit" if b.balance_usd > 0 else ("owes owner" if b.balance_usd < 0 else "settled"),
                 }
                 for b in balances
-                if b.balance_usd > 0
+                if b.balance_usd != 0
             ]
         )
         if not owed_df.empty:
             st.dataframe(owed_df, hide_index=True)
         else:
-            st.success("Everyone is paid up!")
+            st.success("Everyone is settled!")
     else:
         st.info("No members configured yet.")
 
@@ -65,30 +61,31 @@ with col2:
         st.success("All forecasted cycles are posted.")
 
     st.subheader("Latest FX Rate")
-    
-    from ledger.services import fetch_market_rate
     market_rate = fetch_market_rate()
-    
+
     col2a, col2b = st.columns(2)
     with col2a:
         if latest_fx:
             st.metric(
-                "Locked (USD/RUB)",
+                "Locked cycle FX (USD/RUB)",
                 f"{latest_fx.usd_rub:.4f}",
                 help=f"Source: {latest_fx.source} (Date: {latest_fx.rate_date})",
             )
         else:
             st.warning("No FX rates recorded.")
-            
+
     with col2b:
         if market_rate:
             st.metric(
-                "Market Suggested",
+                "Market Suggested (mid-rate)",
                 f"{market_rate:.4f}",
-                help="Fetched from ExchangeRate-API (v4)",
+                help=(
+                    "Fetched from ExchangeRate-API (v4). "
+                    "This is a reference mid-rate; payments use operator-locked effective FX."
+                ),
             )
         else:
-            st.metric("Market Suggested", "Unavailable")
+            st.metric("Market Suggested (mid-rate)", "Unavailable")
 
 st.subheader("Recent Payments")
 if recent_payments:
@@ -99,6 +96,7 @@ if recent_payments:
                     "Date": p.payment_date,
                     "Member": p.display_name,
                     "RUB": float(p.rub_paid),
+                    "Effective FX (USD/RUB)": float(p.fx_locked),
                     "Credit (USD)": float(p.usd_credit),
                 }
                 for p in recent_payments

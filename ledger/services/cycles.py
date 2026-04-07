@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ledger.config import settings
 from ledger.models import ChargeCycle, Member, PostedCharge
-from ledger.schemas import CyclePreview, CycleSummary, MemberChargePreview
+from ledger.schemas import CyclePreview, CycleSummary, EditChargeCommand, MemberChargePreview
 from ledger.services.fx import get_fx_rate
 
 
@@ -62,7 +62,6 @@ def ensure_forecast_cycles(session: Session) -> list[ChargeCycle]:
     horizon = settings.FORECAST_HORIZON_MONTHS
     cutover = settings.CUTOVER_DATE
     today = date.today()
-    # Start from whichever is later: cutover or today
     start = max(cutover, date(today.year, today.month, 1))
     created = []
 
@@ -70,11 +69,7 @@ def ensure_forecast_cycles(session: Session) -> list[ChargeCycle]:
         month_start = start + relativedelta(months=i)
         cycle_date = date(month_start.year, month_start.month, 20)
 
-        existing = (
-            session.query(ChargeCycle)
-            .filter(ChargeCycle.cycle_date == cycle_date)
-            .first()
-        )
+        existing = session.query(ChargeCycle).filter(ChargeCycle.cycle_date == cycle_date).first()
         if existing is None:
             cycle = ChargeCycle(
                 cycle_date=cycle_date,
@@ -158,19 +153,11 @@ def preview_cycle(session: Session, cycle_id: int) -> CyclePreview:
 
 
 def post_cycle(session: Session, cycle_id: int) -> list[PostedCharge]:
-    """Post a forecast cycle. Writes immutable posted_charges rows.
-
-    Raises ValueError for:
-    - cycle already posted
-    - no FX rate on the cycle date
-    - no active counted members (denominator = 0)
-    """
+    """Post a forecast cycle. Writes immutable posted_charges rows."""
     cycle = get_cycle(session, cycle_id)
 
     if cycle.status == "posted":
-        raise ValueError(
-            f"{cycle.cycle_date.strftime('%B %Y')} cycle is already posted."
-        )
+        raise ValueError(f"{cycle.cycle_date.strftime('%B %Y')} cycle is already posted.")
 
     fx = get_fx_rate(session, cycle.cycle_date)
     if fx is None:
@@ -218,7 +205,6 @@ def post_cycle(session: Session, cycle_id: int) -> list[PostedCharge]:
         session.add(charge)
         charges.append(charge)
 
-    # Update cycle row
     cycle.status = "posted"
     cycle.counted_active = denominator
     cycle.billed_active = len(billable)
@@ -229,6 +215,20 @@ def post_cycle(session: Session, cycle_id: int) -> list[PostedCharge]:
     cycle.posted_at = datetime.now(timezone.utc)
 
     return charges
+
+
+def edit_posted_charge(session: Session, cmd: EditChargeCommand) -> PostedCharge:
+    charge = session.get(PostedCharge, cmd.charge_id)
+    if charge is None:
+        raise ValueError(f"Posted charge {cmd.charge_id} not found")
+    charge.charge_usd = cmd.charge_usd
+    charge.fx_locked = cmd.fx_locked
+    charge.charge_rub_equivalent = (cmd.charge_usd * cmd.fx_locked).quantize(
+        Decimal("0.0001")
+    )
+    charge.edited_at = datetime.now(timezone.utc)
+    charge.edit_reason = cmd.edit_reason
+    return charge
 
 
 # ---------------------------------------------------------------------------

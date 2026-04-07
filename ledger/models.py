@@ -3,7 +3,7 @@
 Six tables:
   members, legacy_snapshot, fx_rates, charge_cycles, posted_charges, payments
 
-All posted history is immutable. Constraints are enforced at the DB level.
+All posted history is immutable unless explicitly edited with audit metadata.
 """
 
 from datetime import date, datetime
@@ -136,6 +136,8 @@ class PostedCharge(Base):
     fx_locked: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False)
     # Display-only RUB equivalent at posting time
     charge_rub_equivalent: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    edit_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
@@ -145,7 +147,7 @@ class PostedCharge(Base):
 
 
 class Payment(Base):
-    """Immutable payment record. FX and USD credit are locked at save time."""
+    """Payment record. FX and USD credit are locked at save time."""
 
     __tablename__ = "payments"
 
@@ -157,6 +159,8 @@ class Payment(Base):
     fx_locked: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False)
     usd_credit: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    edit_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )

@@ -3,11 +3,18 @@ import pandas as pd
 from datetime import date
 
 from ledger.database import get_db
-from ledger.services import add_fx_rate, list_all_cycles, list_payments, list_fx_rates
-from ledger.models import FxRate
+from ledger.services import (
+    add_fx_rate,
+    delete_fx_rate,
+    list_all_cycles,
+    list_fx_rates,
+    list_payments,
+)
+from ledger.ui import require_admin
 
-st.set_page_config(page_title="History - Spotify Family Ledger", layout="wide")
 st.title("History")
+
+needs_rerun = False
 
 tab1, tab2, tab3 = st.tabs(["Posted Cycles", "Payments", "FX Rates"])
 
@@ -51,7 +58,7 @@ with get_db() as session:
                         "Date": p.payment_date,
                         "Member": p.display_name,
                         "RUB Paid": float(p.rub_paid),
-                        "FX Locked": float(p.fx_locked),
+                        "Effective FX (USD/RUB)": float(p.fx_locked),
                         "USD Credit": float(p.usd_credit),
                         "Note": p.note,
                         "Logged At": p.created_at.strftime("%Y-%m-%d %H:%M:%S"),
@@ -65,6 +72,7 @@ with get_db() as session:
 
     with tab3:
         st.subheader("FX Rates Log")
+        require_admin()
 
         with st.expander("Add New FX Rate"):
             with st.form("add_fx_form", clear_on_submit=True):
@@ -96,7 +104,19 @@ with get_db() as session:
                         )
                         session.commit()
                         st.toast(f"Added rate for {rate_date}: {usd_rub}")
-                        st.rerun()
+                        needs_rerun = True
+                    except ValueError as e:
+                        st.error(str(e))
+
+        with st.expander("Admin: Delete FX Rate"):
+            with st.form("delete_fx_form", clear_on_submit=True):
+                delete_date = st.date_input("Date to delete")
+                if st.form_submit_button("Delete Rate"):
+                    try:
+                        delete_fx_rate(session, delete_date)
+                        session.commit()
+                        st.toast(f"Deleted rate for {delete_date}")
+                        needs_rerun = True
                     except ValueError as e:
                         st.error(str(e))
 
@@ -116,3 +136,6 @@ with get_db() as session:
             st.dataframe(df_fx, hide_index=True, width="stretch")
         else:
             st.info("No FX rates recorded yet.")
+
+if needs_rerun:
+    st.rerun()

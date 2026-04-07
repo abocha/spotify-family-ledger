@@ -5,11 +5,12 @@ from datetime import date
 from ledger.database import get_db
 from ledger.models import Member
 from ledger.services import get_member_balances
+from ledger.ui import require_admin
 
-st.set_page_config(page_title="Members - Spotify Family Ledger")
 st.title("Members")
 
-# Display members with balances
+needs_rerun = False
+
 with get_db() as session:
     balances = get_member_balances(session)
 
@@ -38,9 +39,8 @@ with get_db() as session:
         st.info("No members configured yet.")
 
     st.divider()
+    require_admin()
 
-    # Admin tool: edit/add member (basic form just to seed the DB if needed)
-    # The design says "admin-only. members can't do anything".
     with st.expander("Admin: Add/Edit Member"):
         members = session.query(Member).order_by(Member.display_name).all()
         member_options = {"New Member": None}
@@ -59,14 +59,23 @@ with get_db() as session:
                 "Active From",
                 value=selected_member.active_from if selected_member else date.today(),
             )
-            active_to = st.date_input(
-                "Active To (optional)",
-                value=(
-                    selected_member.active_to
-                    if selected_member and getattr(selected_member, "active_to", None)
-                    else None
+            has_active_to = st.checkbox(
+                "Has End Date?",
+                value=bool(
+                    selected_member and getattr(selected_member, "active_to", None)
                 ),
             )
+            active_to = None
+            if has_active_to:
+                active_to = st.date_input(
+                    "Active To",
+                    value=(
+                        selected_member.active_to
+                        if selected_member
+                        and getattr(selected_member, "active_to", None)
+                        else date.today()
+                    ),
+                )
             counted = st.checkbox(
                 "Counted in Denominator",
                 value=(
@@ -113,4 +122,7 @@ with get_db() as session:
                         session.add(new_member)
                         st.success(f"Added member: {display_name}")
                     session.commit()
-                    st.rerun()
+                    needs_rerun = True
+
+if needs_rerun:
+    st.rerun()

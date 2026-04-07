@@ -39,6 +39,14 @@ def add_fx_rate(
     return rate
 
 
+def delete_fx_rate(session: Session, rate_date: date) -> None:
+    """Delete an FX rate. Does not affect already-posted cycles or payments which lock their own copy."""
+    rate = get_fx_rate(session, rate_date)
+    if not rate:
+        raise ValueError(f"No FX rate found for {rate_date}.")
+    session.delete(rate)
+
+
 def list_fx_rates(session: Session, limit: int = 100) -> list[FxRate]:
     """Return recent FX rates, newest first."""
     return (

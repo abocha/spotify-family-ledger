@@ -1,11 +1,10 @@
 import pytest
 from datetime import date
-from decimal import Decimal
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from ledger.models import Base, Member, FxRate, ChargeCycle
+from ledger.models import Base, Member
 
 @pytest.fixture
 def engine():
