@@ -15,12 +15,17 @@ from ledger.services import (
     list_all_cycles,
     list_fx_rates,
     list_payments,
+    preview_cycle,
 )
 
 ZERO = Decimal("0")
 
 
-@st.cache_data(ttl=60, show_spinner=False, max_entries=64)
+def _decimal_to_float(value: Decimal | None) -> float | None:
+    return float(value) if value is not None else None
+
+
+@st.cache_data(ttl=300, show_spinner=False, max_entries=64)
 def load_dashboard_data() -> dict:
     with get_db() as session:
         balances = get_member_balances(session)
@@ -76,18 +81,18 @@ def load_dashboard_data() -> dict:
     }
 
 
-@st.cache_data(ttl="15m", show_spinner=False, max_entries=16)
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=16)
 def load_integrity_issues() -> list[dict]:
     with get_db() as session:
         return [issue.model_dump() for issue in check_integrity(session)]
 
 
-@st.cache_data(ttl="15m", show_spinner=False, max_entries=8)
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=8)
 def load_market_rate_value() -> float | None:
     return fetch_market_rate()
 
 
-@st.cache_data(ttl=120, show_spinner=False, max_entries=64)
+@st.cache_data(ttl=300, show_spinner=False, max_entries=64)
 def load_cycles_history_df() -> pd.DataFrame:
     with get_db() as session:
         cycles = list_all_cycles(session)
@@ -108,7 +113,7 @@ def load_cycles_history_df() -> pd.DataFrame:
     )
 
 
-@st.cache_data(ttl=120, show_spinner=False, max_entries=64)
+@st.cache_data(ttl=300, show_spinner=False, max_entries=64)
 def load_payments_history_df() -> pd.DataFrame:
     with get_db() as session:
         payments = list_payments(session)
@@ -128,7 +133,7 @@ def load_payments_history_df() -> pd.DataFrame:
     )
 
 
-@st.cache_data(ttl=120, show_spinner=False, max_entries=64)
+@st.cache_data(ttl=300, show_spinner=False, max_entries=64)
 def load_fx_rates_history_df() -> pd.DataFrame:
     with get_db() as session:
         fx_rates = list_fx_rates(session)
@@ -144,3 +149,78 @@ def load_fx_rates_history_df() -> pd.DataFrame:
             for fx in fx_rates
         ]
     )
+
+
+@st.cache_data(ttl=300, show_spinner=False, max_entries=64)
+def load_members_table_df() -> pd.DataFrame:
+    """Load member balances as a dataframe for display."""
+    with get_db() as session:
+        balances = get_member_balances(session)
+
+    return pd.DataFrame(
+        [
+            {
+                "Member": b.display_name,
+                "Active": "✅" if b.is_active else "❌",
+                "Counted": "✅" if b.counted_in_denominator else "—",
+                "Billable": "✅" if b.billable_after_cutover else "—",
+                "Legacy Opening (RUB)": float(b.legacy_opening_rub),
+                "Charges (RUB)": float(b.posted_charges_rub),
+                "Payments (RUB)": float(b.payment_credits_rub),
+                "Balance (RUB)": float(b.balance_rub),
+                "USD Equivalent": float(b.balance_usd_equivalent) if b.balance_usd_equivalent is not None else None,
+            }
+            for b in balances
+        ]
+    )
+
+
+@st.cache_data(ttl=300, show_spinner=False, max_entries=64)
+def load_next_cycle_preview_data() -> dict:
+    """Load the next unposted cycle preview as plain dicts/dataframes."""
+    with get_db() as session:
+        next_cycle = get_next_unposted_cycle(session)
+        if not next_cycle:
+            return {"state": "empty"}
+
+        try:
+            preview = preview_cycle(session, next_cycle.id)
+        except ValueError as exc:
+            return {
+                "state": "error",
+                "message": str(exc),
+            }
+
+    # Return plain dict representation of preview for page 3
+    return {
+        "state": "ok",
+        "cycle_id": preview.cycle_id,
+        "cycle_date": preview.cycle_date,
+        "subscription_usd": float(preview.subscription_usd),
+        "subscription_rub": _decimal_to_float(preview.subscription_rub),
+        "counted_active": preview.counted_active,
+        "billed_active": preview.billed_active,
+        "rub_per_slot": _decimal_to_float(preview.rub_per_slot),
+        "total_billed_rub": _decimal_to_float(preview.total_billed_rub),
+        "owner_subsidy_rub": _decimal_to_float(preview.owner_subsidy_rub),
+        "fx_rate": _decimal_to_float(preview.fx_rate),
+        "fx_available": preview.fx_available,
+        "estimated_fx_rate": _decimal_to_float(preview.estimated_fx_rate),
+        "estimated_subscription_rub": _decimal_to_float(preview.estimated_subscription_rub),
+        "estimated_rub_per_slot": _decimal_to_float(preview.estimated_rub_per_slot),
+        "estimated_total_billed_rub": _decimal_to_float(preview.estimated_total_billed_rub),
+        "estimated_owner_subsidy_rub": _decimal_to_float(preview.estimated_owner_subsidy_rub),
+        "uses_estimated_fx": preview.uses_estimated_fx,
+        "member_charges": [
+            {
+                "member_id": mc.member_id,
+                "display_name": mc.display_name,
+                "counted": mc.counted,
+                "billable": mc.billable,
+                "charge_usd": float(mc.charge_usd),
+                "charge_rub": _decimal_to_float(mc.charge_rub),
+                "estimated_charge_rub": _decimal_to_float(mc.estimated_charge_rub),
+            }
+            for mc in preview.member_charges
+        ],
+    }

@@ -1,12 +1,12 @@
 from datetime import date
 
-import pandas as pd
 import streamlit as st
 
 from ledger.bootstrap import bootstrap_page
 from ledger.database import get_db
 from ledger.models import Member
-from ledger.services import get_member_balances, save_member
+from ledger.read_cache import load_members_table_df
+from ledger.services import save_member
 from ledger.ui import require_admin
 
 st.title("Members")
@@ -17,31 +17,17 @@ if flash:
 
 with get_db() as session:
     bootstrap_page(session)
-    balances = get_member_balances(session)
 
-    if balances:
-        df = pd.DataFrame(
-            [
-                {
-                    "Name": b.display_name,
-                    "Current RUB Balance": round(float(b.balance_rub), 2),
-                    "USD Equivalent": (
-                        round(float(b.balance_usd_equivalent), 2)
-                        if b.balance_usd_equivalent is not None
-                        else "No FX"
-                    ),
-                    "Is Active": "✅" if b.is_active else "❌",
-                    "Counted (Denominator)": "✅" if b.counted_in_denominator else "❌",
-                    "Billable (Receives Charge)": ("✅" if b.billable_after_cutover else "❌"),
-                }
-                for b in balances
-            ]
-        )
-        st.dataframe(df, hide_index=True, width="stretch")
-    else:
-        st.info("No members configured yet.")
+# Use cached loader for display table
+df = load_members_table_df()
+if not df.empty:
+    st.dataframe(df, hide_index=True, width="stretch")
+else:
+    st.info("No members configured yet.")
 
-    st.divider()
+st.divider()
+
+with get_db() as session:
     require_admin()
 
     with st.expander("Admin: Add/Edit Member"):

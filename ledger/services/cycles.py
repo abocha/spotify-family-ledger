@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from ledger.config import settings
 from ledger.models import ChargeCycle, Member, PostedCharge
 from ledger.schemas import CyclePreview, CycleSummary, EditChargeCommand, MemberChargePreview
-from ledger.services.fx import ensure_fx_rate, get_fx_rate
+from ledger.services.fx import ensure_fx_rate, get_fx_rate, get_latest_fx_rate
 
 
 def get_next_unposted_cycle(session: Session) -> ChargeCycle | None:
@@ -78,23 +78,62 @@ def _cycle_members(session: Session, cycle_date: date) -> tuple[list[Member], li
     return members, counted, billable
 
 
-def _calculate_cycle_preview(cycle: ChargeCycle, members: list[Member], counted: list[Member], billable: list[Member], fx_rate: Decimal | None) -> CyclePreview:
+def _calculate_rub_values(
+    subscription_usd: Decimal,
+    denominator: int,
+    billable_count: int,
+    fx_rate: Decimal,
+) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    """Helper to compute RUB-based values from FX rate.
+    
+    Returns: (subscription_rub, rub_per_slot, total_billed_rub, owner_subsidy_rub)
+    """
+    subscription_rub = (subscription_usd * fx_rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    rub_per_slot = (subscription_rub / Decimal(denominator)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    total_billed_rub = (rub_per_slot * Decimal(billable_count)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    owner_subsidy_rub = subscription_rub - total_billed_rub
+    return subscription_rub, rub_per_slot, total_billed_rub, owner_subsidy_rub
+
+
+def _calculate_cycle_preview(
+    cycle: ChargeCycle,
+    members: list[Member],
+    counted: list[Member],
+    billable: list[Member],
+    fx_rate: Decimal | None,
+    estimated_fx_rate: Decimal | None = None,
+) -> CyclePreview:
     if not counted:
         raise ValueError(
             f"Cannot calculate cycle for {cycle.cycle_date}: there are no active counted members."
         )
 
     denominator = len(counted)
+    billable_count = len(billable)
+    
+    # Actual values from exact FX
     subscription_rub = None
     rub_per_slot = None
     total_billed_rub = None
     owner_subsidy_rub = None
+    uses_estimated_fx = False
+    
+    # Estimated values from latest stored FX
+    estimated_subscription_rub = None
+    estimated_rub_per_slot = None
+    estimated_total_billed_rub = None
+    estimated_owner_subsidy_rub = None
 
     if fx_rate is not None:
-        subscription_rub = (cycle.subscription_usd * fx_rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        rub_per_slot = (subscription_rub / Decimal(denominator)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        total_billed_rub = (rub_per_slot * Decimal(len(billable))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        owner_subsidy_rub = subscription_rub - total_billed_rub
+        subscription_rub, rub_per_slot, total_billed_rub, owner_subsidy_rub = _calculate_rub_values(
+            cycle.subscription_usd, denominator, billable_count, fx_rate
+        )
+    elif estimated_fx_rate is not None:
+        # Use estimated values when exact FX is missing but latest stored FX exists
+        estimated_subscription_rub, estimated_rub_per_slot, estimated_total_billed_rub, estimated_owner_subsidy_rub = _calculate_rub_values(
+            cycle.subscription_usd, denominator, billable_count, estimated_fx_rate
+        )
+        uses_estimated_fx = True
 
     member_charges = []
     for m in members:
@@ -102,6 +141,9 @@ def _calculate_cycle_preview(cycle: ChargeCycle, members: list[Member], counted:
         is_billable = m.is_active_on(cycle.cycle_date) and m.billable_after_cutover
         charge_usd = (cycle.subscription_usd / Decimal(denominator)) if is_billable else Decimal(0)
         charge_rub = rub_per_slot if (is_billable and rub_per_slot is not None) else None
+        estimated_charge_rub = None
+        if is_billable and estimated_rub_per_slot is not None:
+            estimated_charge_rub = estimated_rub_per_slot
         member_charges.append(
             MemberChargePreview(
                 member_id=m.id,
@@ -110,6 +152,7 @@ def _calculate_cycle_preview(cycle: ChargeCycle, members: list[Member], counted:
                 billable=is_billable,
                 charge_usd=charge_usd,
                 charge_rub=charge_rub,
+                estimated_charge_rub=estimated_charge_rub,
             )
         )
 
@@ -125,6 +168,12 @@ def _calculate_cycle_preview(cycle: ChargeCycle, members: list[Member], counted:
         owner_subsidy_rub=owner_subsidy_rub,
         fx_rate=fx_rate,
         fx_available=fx_rate is not None,
+        estimated_fx_rate=estimated_fx_rate,
+        estimated_subscription_rub=estimated_subscription_rub,
+        estimated_rub_per_slot=estimated_rub_per_slot,
+        estimated_total_billed_rub=estimated_total_billed_rub,
+        estimated_owner_subsidy_rub=estimated_owner_subsidy_rub,
+        uses_estimated_fx=uses_estimated_fx,
         member_charges=member_charges,
     )
 
@@ -136,8 +185,15 @@ def preview_cycle(session: Session, cycle_id: int) -> CyclePreview:
 
     fx_obj = get_fx_rate(session, cycle.cycle_date)
     fx_rate = fx_obj.usd_rub if fx_obj else None
+    
+    # If exact FX is missing, try to get latest stored FX for estimates
+    estimated_fx_rate = None
+    if fx_rate is None:
+        latest_fx_obj = get_latest_fx_rate(session)
+        estimated_fx_rate = latest_fx_obj.usd_rub if latest_fx_obj else None
+    
     members, counted, billable = _cycle_members(session, cycle.cycle_date)
-    return _calculate_cycle_preview(cycle, members, counted, billable, fx_rate)
+    return _calculate_cycle_preview(cycle, members, counted, billable, fx_rate, estimated_fx_rate)
 
 
 def post_cycle(session: Session, cycle_id: int) -> ChargeCycle:

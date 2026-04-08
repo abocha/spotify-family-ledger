@@ -92,6 +92,12 @@ class CyclePreview(BaseModel):
     owner_subsidy_rub: Decimal | None
     fx_rate: Decimal | None
     fx_available: bool
+    estimated_fx_rate: Decimal | None = None
+    estimated_subscription_rub: Decimal | None = None
+    estimated_rub_per_slot: Decimal | None = None
+    estimated_total_billed_rub: Decimal | None = None
+    estimated_owner_subsidy_rub: Decimal | None = None
+    uses_estimated_fx: bool = False
     member_charges: list["MemberChargePreview"]
 
 
@@ -102,6 +108,7 @@ class MemberChargePreview(BaseModel):
     billable: bool
     charge_usd: Decimal
     charge_rub: Decimal | None
+    estimated_charge_rub: Decimal | None = None
 
 
 class PaymentPreview(BaseModel):
