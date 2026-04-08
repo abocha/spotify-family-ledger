@@ -12,6 +12,8 @@ A small owner-facing Streamlit app for managing a shared Spotify Family subscrip
 
 ## Setup
 
+### Local Development
+
 1. **Install dependencies**
    ```bash
    uv sync
@@ -45,6 +47,39 @@ A small owner-facing Streamlit app for managing a shared Spotify Family subscrip
    ```bash
    uv run streamlit run app.py
    ```
+
+### Streamlit Community Cloud Deployment
+
+1. **Push your code to GitHub** (if not already done)
+
+2. **Create a Streamlit Community Cloud app**
+   - Go to [Streamlit Community Cloud](https://streamlit.io/cloud)
+   - Connect your GitHub repository
+   - Select the branch and specify `app.py` as the entry point
+
+3. **Configure secrets**
+   - In the Streamlit Cloud dashboard, go to **App settings** → **Secrets**
+   - Add your environment variables in `secrets.toml` format:
+     ```toml
+     TURSO_URL = "your_turso_url"
+     TURSO_KEY = "your_turso_key"
+     SUBSCRIPTION_USD = "8.00"
+     CUTOVER_DATE = "2026-04-20"
+     CURRENCYBEACON_API_KEY = "your_key_here"
+     ```
+   - Streamlit automatically exposes these as environment variables to the app
+
+4. **Database**
+   - Ensure `TURSO_URL` points to a remote Turso database (not local SQLite)
+   - Before initial deployment, initialize the schema locally and push to Turso:
+     ```bash
+     uv run alembic upgrade head
+     ```
+   - This step must be completed before deploying to Streamlit Cloud
+
+5. **FX API Configuration**
+   - `CURRENCYBEACON_API_KEY` is the preferred FX provider
+   - `EXCHANGERATE_API_KEY` is supported as a legacy fallback (not recommended for new deployments)
 
 ## Design principles
 

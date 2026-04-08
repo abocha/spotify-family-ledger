@@ -2,6 +2,7 @@ import streamlit as st
 from decimal import Decimal
 
 from ledger.database import get_db
+from ledger.bootstrap import bootstrap_page
 from ledger.models import Payment, PostedCharge
 from ledger.schemas import EditChargeCommand, EditPaymentCommand
 from ledger.services.cycles import edit_posted_charge
@@ -17,6 +18,8 @@ if flash:
     st.success(flash)
 
 with get_db() as session:
+    bootstrap_page(session)
+    
     tab1, tab2 = st.tabs(["Payments", "Charges"])
 
     with tab1:

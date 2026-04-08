@@ -3,6 +3,7 @@ import datetime
 import streamlit as st
 
 from ledger.database import get_db
+from ledger.bootstrap import bootstrap_page
 from ledger.services import build_export_workbook
 
 st.title("Export")
@@ -15,13 +16,15 @@ This includes:
 - **Summary**: Key metrics and generated date.
 - **Members**: Current active status, counters, and up-to-date balances in USD and RUB.
 - **Charges**: Full history of immutable posted charges per member.
-- **Payments**: Full log of recorded member payments with operator-locked effective FX.
+- **Payments**: Full log of recorded member payments in RUB.
 - **FX Rates**: All recorded exchange rates.
 """
 )
 
 try:
     with get_db() as session:
+        bootstrap_page(session)
+        
         workbook_bytes = build_export_workbook(session)
 
         date_str = datetime.date.today().strftime("%Y-%m-%d")

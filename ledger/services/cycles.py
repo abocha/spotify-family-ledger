@@ -22,6 +22,11 @@ def get_next_unposted_cycle(session: Session) -> ChargeCycle | None:
 
 
 def ensure_forecast_cycles(session: Session) -> list[ChargeCycle]:
+    """Generate forecast cycles up to the horizon.
+    
+    Returns only newly created forecast cycles.
+    An empty list means no DB mutations occurred (safe signal for cache invalidation).
+    """
     today = date.today()
     cutover = settings.CUTOVER_DATE
     first_cycle = date(cutover.year, cutover.month, 20)
@@ -190,21 +195,34 @@ def run_cycle_for_date(session: Session, cycle_date: date) -> ChargeCycle:
 
 
 def run_due_cycles(session: Session, up_to: date | None = None) -> list[ChargeCycle]:
+    """Process all due cycles up to a given date.
+    
+    Returns only cycles that were actually changed from forecast to posted.
+    An empty list means no DB mutations occurred (safe signal for cache invalidation).
+    """
     if up_to is None:
         up_to = date.today()
 
-    processed: list[ChargeCycle] = []
+    mutated: list[ChargeCycle] = []
     first_cycle = date(settings.CUTOVER_DATE.year, settings.CUTOVER_DATE.month, 20)
     if first_cycle < settings.CUTOVER_DATE:
         first_cycle += relativedelta(months=1)
 
     cycle_date = first_cycle
     while cycle_date <= up_to:
-        processed.append(run_cycle_for_date(session, cycle_date))
+        cycle_before = session.query(ChargeCycle).filter(ChargeCycle.cycle_date == cycle_date).one_or_none()
+        status_before = cycle_before.status if cycle_before else None
+        
+        cycle_after = run_cycle_for_date(session, cycle_date)
+        
+        # Only include cycles that were changed: (None -> posted) or (forecast -> posted)
+        if (status_before is None or status_before == "forecast") and cycle_after.status == "posted":
+            mutated.append(cycle_after)
+        
         cycle_date += relativedelta(months=1)
 
     session.commit()
-    return processed
+    return mutated
 
 
 def process_backlog(session: Session) -> list[ChargeCycle]:

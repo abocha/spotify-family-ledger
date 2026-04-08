@@ -3,6 +3,7 @@ from datetime import date
 from decimal import Decimal
 
 from ledger.database import get_db
+from ledger.bootstrap import bootstrap_page
 from ledger.models import Member
 from ledger.schemas import RecordPaymentCommand
 from ledger.services import preview_payment, record_payment
@@ -20,6 +21,8 @@ if "payment_preview" not in st.session_state:
     st.session_state.payment_cmd = None
 
 with get_db() as session:
+    bootstrap_page(session)
+    
     members = session.query(Member).order_by(Member.display_name).all()
     if not members:
         st.warning("No members available.")

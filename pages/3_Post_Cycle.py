@@ -6,7 +6,7 @@ from ledger.database import get_db
 from ledger.services import get_next_unposted_cycle, preview_cycle
 from ledger.ui import require_admin
 
-st.title("Monthly Cycle")
+st.title("Next Cycle Preview")
 require_admin()
 
 with get_db() as session:

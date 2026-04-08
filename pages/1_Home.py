@@ -19,9 +19,14 @@ market_rate = load_market_rate_value()
 
 if issues:
     with st.expander(f"Integrity issues: {len(issues)}", expanded=False):
-        st.error(f"Found {len(issues)} integrity issue(s).")
         for issue in issues:
-            st.warning(issue["message"])
+            severity = issue.get("severity", "info")
+            if severity == "error":
+                st.error(issue["message"])
+            elif severity == "warning":
+                st.warning(issue["message"])
+            else:
+                st.info(issue["message"])
 
 col1, col2 = st.columns(2)
 

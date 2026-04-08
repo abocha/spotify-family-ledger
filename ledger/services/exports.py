@@ -54,7 +54,6 @@ def build_export_workbook(session: Session) -> io.BytesIO:
                 "Date": payment.payment_date,
                 "Member": member.display_name,
                 "RUB Paid": float(payment.rub_paid),
-                "FX Locked": float(payment.fx_locked),
                 "RUB Credit": float(payment.usd_credit),
                 "Note": payment.note,
             }

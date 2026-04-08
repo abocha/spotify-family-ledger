@@ -18,7 +18,7 @@ with get_db() as session:
     bootstrap_page(session)
 
 section = st.radio(
-    "Section",
+    "View",
     ["Cycles", "Payments", "FX Rates"],
     horizontal=True,
 )

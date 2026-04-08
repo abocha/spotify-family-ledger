@@ -64,7 +64,11 @@ with get_db() as session:
                     value=(selected_member.active_to if selected_member and getattr(selected_member, "active_to", None) else date.today()),
                 )
             counted = st.checkbox("Counted in Denominator", value=(selected_member.counted_in_denominator if selected_member else True))
-            billable = st.checkbox("Billable after Cutover", value=(selected_member.billable_after_cutover if selected_member else True))
+            billable = st.checkbox(
+                "Receives monthly charge",
+                value=(selected_member.billable_after_cutover if selected_member else True),
+                help="If enabled, this member gets a charge row when monthly billing is posted."
+            )
             note = st.text_area("Note", value=(selected_member.note if selected_member and getattr(selected_member, "note", None) else ""))
 
             submit = st.form_submit_button("Save Member")
