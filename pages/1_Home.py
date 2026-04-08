@@ -32,13 +32,13 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("Balances")
-    st.metric("Total Owed to Owner (RUB)", f"{dashboard['owed_total']:.2f}")
+    st.metric("Total Owed to Owner (RUB)", f"₽ {dashboard['owed_total']:.0f}")
 
     balances_df = dashboard["balances_df"]
     if dashboard["balances_count"] == 0:
-        st.info("No members configured yet.")
+        st.info("No members configured yet. Please add members on the Members page.")
     elif balances_df.empty:
-        st.success("Everyone is settled!")
+        st.success("Everyone is settled! 🎉")
     else:
         st.dataframe(balances_df, hide_index=True, width="stretch")
 
@@ -46,11 +46,11 @@ with col2:
     st.subheader("Next Action")
     next_cycle_date = dashboard["next_cycle_date"]
     if next_cycle_date:
-        st.info(f"Next cycle to post: **{next_cycle_date.strftime('%B %Y')}**")
+        st.info(f"Next cycle to post: **{next_cycle_date.strftime('%d %B %Y')}**")
     else:
         st.success("All forecasted cycles are posted.")
 
-    st.subheader("Latest FX Rate")
+    st.subheader("Latest Exchange Rate (USD/RUB)")
 
     fx_col1, fx_col2 = st.columns(2)
 
@@ -58,8 +58,8 @@ with col2:
     with fx_col1:
         if latest_fx:
             st.metric(
-                "Locked cycle FX (USD/RUB)",
-                f"{latest_fx['usd_rub']:.4f}",
+                "Locked Exchange Rate",
+                f"{latest_fx['usd_rub']:.2f}",
                 help=f"Source: {latest_fx['source']} (Date: {latest_fx['rate_date']})",
             )
         else:
@@ -68,15 +68,15 @@ with col2:
     with fx_col2:
         if market_rate is not None:
             st.metric(
-                "Market Suggested (mid-rate)",
-                f"{market_rate:.4f}",
+                "Market Suggested",
+                f"{market_rate:.2f}",
                 help=(
                     "Fetched from CurrencyBeacon. "
                     "This is a reference mid-rate; payments use RUB directly."
                 ),
             )
         else:
-            st.metric("Market Suggested (mid-rate)", "Unavailable")
+            st.metric("Market Suggested", "Unavailable")
 
 st.subheader("Recent Payments")
 recent_payments_df = dashboard["recent_payments_df"]

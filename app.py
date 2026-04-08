@@ -6,7 +6,7 @@ from ledger.bootstrap import bootstrap_page
 
 st.set_page_config(
     page_title="Spotify Family Ledger",
-    page_icon="🛰️",
+    page_icon="🎧",
     layout="wide",
 )
 
@@ -44,7 +44,7 @@ else:
         """
         **Admin mode unlocked.**
 
-        The ledger processes cycles automatically; admin mode is now mostly for inspection and emergency maintenance.
+        The ledger processes cycles automatically.
         """
     )
     if st.button("Log out"):

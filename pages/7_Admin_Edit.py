@@ -47,7 +47,9 @@ with get_db() as session:
                             st.session_state.flash = "Payment updated."
                             st.rerun()
                         except ValueError as e:
-                            st.error(str(e))
+                            with st.container(border=True):
+                                st.error("❌ Could not save payment edit")
+                                st.caption(f"Details: {str(e)}")
         else:
             st.info("No payments found.")
 
@@ -74,6 +76,8 @@ with get_db() as session:
                             st.session_state.flash = "Charge updated."
                             st.rerun()
                         except ValueError as e:
-                            st.error(str(e))
+                            with st.container(border=True):
+                                st.error("❌ Could not save charge edit")
+                                st.caption(f"Details: {str(e)}")
         else:
             st.info("No posted charges found.")

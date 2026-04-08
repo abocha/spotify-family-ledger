@@ -56,5 +56,5 @@ with get_db() as session:
     st.dataframe(members_df, hide_index=True)
 
     st.info(
-        "Cycle processing is now automatic on the 20th and on startup catch-up. This page is read-only."
+        "Cycle processing is automatic on the 20th and on startup catch-up. This page is read-only."
     )

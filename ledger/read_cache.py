@@ -36,9 +36,9 @@ def load_dashboard_data() -> dict:
                 "Member": b.display_name,
                 "Balance (RUB)": float(b.balance_rub),
                 "Status": (
-                    "has credit"
+                    "✅has credit"
                     if b.balance_rub > 0
-                    else ("owes owner" if b.balance_rub < 0 else "settled")
+                    else ("❌owes owner" if b.balance_rub < 0 else "✅settled")
                 ),
             }
             for b in balances
