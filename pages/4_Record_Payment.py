@@ -48,6 +48,7 @@ with get_db() as session:
                     preview = preview_payment(session, cmd)
                     st.session_state.payment_preview = preview
                     st.session_state.payment_cmd = cmd
+                    st.rerun()
                 except ValueError as e:
                     st.error(str(e))
                 except Exception as e:
@@ -76,6 +77,7 @@ with get_db() as session:
             if cancel_submit:
                 st.session_state.payment_preview = None
                 st.session_state.payment_cmd = None
+                st.rerun()
 
             if save_submit:
                 if not confirm:

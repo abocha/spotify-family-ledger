@@ -24,33 +24,46 @@ def get_next_unposted_cycle(session: Session) -> ChargeCycle | None:
 def ensure_forecast_cycles(session: Session) -> list[ChargeCycle]:
     today = date.today()
     cutover = settings.CUTOVER_DATE
-    start_date = date(cutover.year, cutover.month, 20)
+    first_cycle = date(cutover.year, cutover.month, 20)
+    if first_cycle < cutover:
+        first_cycle += relativedelta(months=1)
 
-    existing = session.query(ChargeCycle).order_by(ChargeCycle.cycle_date.desc()).first()
-    if existing:
-        start_date = existing.cycle_date + relativedelta(months=1)
-    elif today >= start_date:
-        start_date = date(today.year, today.month, 20)
-        if today >= start_date:
-            start_date += relativedelta(months=1)
+    # We want a fixed rolling horizon ahead of "today", not ahead of the latest row in DB.
+    current_cycle_anchor = date(today.year, today.month, 20)
+    if today >= current_cycle_anchor:
+        horizon_start = current_cycle_anchor + relativedelta(months=1)
+    else:
+        horizon_start = current_cycle_anchor
+
+    horizon_start = max(horizon_start, first_cycle)
+    horizon_end = horizon_start + relativedelta(months=settings.FORECAST_HORIZON_MONTHS - 1)
+
+    existing_last = session.query(ChargeCycle).order_by(ChargeCycle.cycle_date.desc()).first()
+    if existing_last:
+        start_date = max(existing_last.cycle_date + relativedelta(months=1), first_cycle)
+    else:
+        start_date = first_cycle
+
+    if start_date > horizon_end:
+        return []
 
     new_cycles = []
-    needed = settings.FORECAST_HORIZON_MONTHS
-    for i in range(needed + 1 if not existing else needed):
-        target_date = start_date + relativedelta(months=i)
-        if target_date < settings.CUTOVER_DATE:
-            continue
-        cycle = ChargeCycle(
-            cycle_date=target_date,
-            subscription_usd=settings.SUBSCRIPTION_USD,
-            status="forecast",
+    cycle_date = start_date
+    while cycle_date <= horizon_end:
+        session.add(
+            ChargeCycle(
+                cycle_date=cycle_date,
+                subscription_usd=settings.SUBSCRIPTION_USD,
+                status="forecast",
+            )
         )
-        session.add(cycle)
-        new_cycles.append(cycle)
+        new_cycles.append(cycle_date)
+        cycle_date += relativedelta(months=1)
 
     if new_cycles:
         session.commit()
-    return new_cycles
+
+    return session.query(ChargeCycle).filter(ChargeCycle.cycle_date.in_(new_cycles)).all()
 
 
 def _cycle_members(session: Session, cycle_date: date) -> tuple[list[Member], list[Member], list[Member]]:
