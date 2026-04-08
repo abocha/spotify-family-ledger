@@ -11,7 +11,9 @@ from ledger.ui import require_admin
 
 st.title("Members")
 
-needs_rerun = False
+flash = st.session_state.pop("flash", None)
+if flash:
+    st.success(flash)
 
 with get_db() as session:
     bootstrap_page(session)
@@ -79,10 +81,8 @@ with get_db() as session:
                         note=note,
                     )
                     session.commit()
-                    st.success(f"Saved member: {member.display_name}")
-                    needs_rerun = True
+                    st.cache_data.clear()
+                    st.session_state.flash = f"Saved member: {member.display_name}"
+                    st.rerun()
                 except ValueError as e:
                     st.error(str(e))
-
-if needs_rerun:
-    st.rerun()

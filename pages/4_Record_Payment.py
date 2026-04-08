@@ -11,11 +11,13 @@ from ledger.ui import require_admin
 st.title("Record Payment")
 require_admin()
 
+flash = st.session_state.pop("flash", None)
+if flash:
+    st.success(flash)
+
 if "payment_preview" not in st.session_state:
     st.session_state.payment_preview = None
     st.session_state.payment_cmd = None
-
-needs_rerun = False
 
 with get_db() as session:
     members = session.query(Member).order_by(Member.display_name).all()
@@ -46,7 +48,6 @@ with get_db() as session:
                     preview = preview_payment(session, cmd)
                     st.session_state.payment_preview = preview
                     st.session_state.payment_cmd = cmd
-                    needs_rerun = True
                 except ValueError as e:
                     st.error(str(e))
                 except Exception as e:
@@ -75,7 +76,6 @@ with get_db() as session:
             if cancel_submit:
                 st.session_state.payment_preview = None
                 st.session_state.payment_cmd = None
-                needs_rerun = True
 
             if save_submit:
                 if not confirm:
@@ -84,14 +84,12 @@ with get_db() as session:
                     try:
                         payment = record_payment(session, cmd)
                         session.commit()
-                        st.toast(f"Payment recorded! Member credited with {payment.usd_credit:.2f} RUB")
+                        st.cache_data.clear()
+                        st.session_state.flash = f"Payment recorded. Member credited with {payment.usd_credit:.2f} RUB"
                         st.session_state.payment_preview = None
                         st.session_state.payment_cmd = None
-                        needs_rerun = True
+                        st.rerun()
                     except ValueError as e:
                         st.error(str(e))
                     except Exception as e:
                         st.error(f"Unexpected error: {str(e)}")
-
-if needs_rerun:
-    st.rerun()

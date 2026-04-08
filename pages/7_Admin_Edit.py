@@ -12,6 +12,10 @@ st.title("Admin: Edit History")
 require_admin()
 st.warning("Edits are in-place and audited. Dates stay fixed.")
 
+flash = st.session_state.pop("flash", None)
+if flash:
+    st.success(flash)
+
 with get_db() as session:
     tab1, tab2 = st.tabs(["Payments", "Charges"])
 
@@ -36,7 +40,8 @@ with get_db() as session:
                             )
                             edit_payment(session, cmd)
                             session.commit()
-                            st.success("Payment updated.")
+                            st.cache_data.clear()
+                            st.session_state.flash = "Payment updated."
                             st.rerun()
                         except ValueError as e:
                             st.error(str(e))
@@ -62,7 +67,8 @@ with get_db() as session:
                             )
                             edit_posted_charge(session, cmd)
                             session.commit()
-                            st.success("Charge updated.")
+                            st.cache_data.clear()
+                            st.session_state.flash = "Charge updated."
                             st.rerun()
                         except ValueError as e:
                             st.error(str(e))
