@@ -45,48 +45,52 @@ def is_admin_mode() -> bool:
 
 def require_admin() -> None:
     if not is_admin_mode():
-        st.warning("Admin mode required.")
+        st.warning("🔒 Admin mode required.")
         st.stop()
 
 
 def render_auth_sidebar() -> None:
     with st.sidebar:
-        st.header("Access")
+        st.header("🔐 Access")
         if is_admin_mode():
-            st.success("Admin mode enabled")
+            st.success("✅ Admin mode enabled")
             if st.button("Log out", use_container_width=True):
                 st.session_state.mode = "public"
                 st.rerun()
             return
 
-        st.info("Public read-only mode")
+        st.info("👀 Public read-only mode")
         password = st.text_input("Admin password", type="password")
         if st.button("Log in as admin", use_container_width=True):
             if is_admin_password(password):
                 st.session_state.mode = "admin"
                 st.rerun()
             else:
-                st.error("Wrong password.")
+                st.error("❌ Wrong password.")
 
         if not get_admin_password_hash():
-            st.warning("ADMIN_PASSWORD_HASH is not configured.")
+            st.warning("⚠️ ADMIN_PASSWORD_HASH is not configured.")
 
 
 def render_status_banner(status: LedgerStatus | ReconciliationOutcome) -> None:
     if status.state == "healthy":
-        exact_through = status.exact_through_date.isoformat() if status.exact_through_date else "not yet posted"
-        st.success(f"Ledger healthy. Exact through {exact_through}.")
+        if status.exact_through_date is None:
+            st.success("✅ Ledger healthy. No posted billing cycles yet.")
+            return
+
+        exact_through = status.exact_through_date.isoformat()
+        st.success(f"✅ Ledger healthy. Exact through {exact_through}.")
         return
 
     if status.state == "running":
-        st.warning(status.failure_message or "Reconciliation is currently running.")
+        st.warning(f"⏳ {status.failure_message or 'Reconciliation is currently running.'}")
         return
 
     exact_through = status.exact_through_date.isoformat() if status.exact_through_date else "nothing yet"
     failure_cycle = status.failure_cycle_date.isoformat() if status.failure_cycle_date else "unknown month"
     message = status.failure_message or "Unknown reconciliation error."
     st.error(
-        f"Ledger stale. Exact through {exact_through}. "
+        f"⚠️ Ledger stale. Exact through {exact_through}. "
         f"Failed while reconciling {failure_cycle}. {message}"
     )
 

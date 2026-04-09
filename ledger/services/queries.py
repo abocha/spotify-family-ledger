@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import func
+from sqlalchemy import Numeric, Text, func, literal, select, union_all
 from sqlalchemy.orm import Session
 
 from ledger.models import Adjustment, BillingCycle, Member, MemberCharge, OpeningBalance, Payment, ReconciliationRun
@@ -125,98 +125,117 @@ def list_member_balances(session: Session) -> list[MemberBalance]:
     return balances
 
 
-def get_member_statement(session: Session, member_id: int) -> MemberStatement:
-    member = session.get(Member, member_id)
-    if member is None:
-        raise ValueError(f"Member with id {member_id} not found.")
+def list_member_options(session: Session) -> list[tuple[int, str]]:
+    rows = (
+        session.query(Member.id, Member.display_name)
+        .order_by(Member.display_name)
+        .all()
+    )
+    return [(member_id, display_name) for member_id, display_name in rows]
 
-    status = get_ledger_status(session)
-    entries: list[tuple[date, str, Decimal, str, Decimal | None, Decimal | None, str | None]] = []
 
-    opening = (
-        session.query(OpeningBalance)
-        .filter(OpeningBalance.member_id == member_id)
+def get_member_statement(
+    session: Session,
+    member_id: int,
+    *,
+    exact_through_date: date | None = None,
+) -> MemberStatement:
+    member_row = (
+        session.query(Member.id, Member.display_name)
+        .filter(Member.id == member_id)
         .one_or_none()
     )
-    if opening is not None:
-        entries.append(
-            (
-                opening.snapshot_date,
-                "opening_balance",
-                opening.opening_balance_rub,
-                "Opening balance",
-                None,
-                None,
-                opening.source_note,
-            )
-        )
+    if member_row is None:
+        raise ValueError(f"Member with id {member_id} not found.")
 
-    for charge in (
-        session.query(MemberCharge)
-        .filter(MemberCharge.member_id == member_id)
-        .order_by(MemberCharge.charge_date, MemberCharge.id)
-        .all()
-    ):
-        entries.append(
-            (
-                charge.charge_date,
-                "charge",
-                -charge.charge_rub,
-                f"Monthly charge for {charge.charge_date.strftime('%B %Y')}",
-                charge.fx_locked,
-                charge.subscription_usd,
-                None,
-            )
-        )
+    opening_select = select(
+        OpeningBalance.snapshot_date.label("entry_date"),
+        literal("opening_balance").label("entry_type"),
+        OpeningBalance.opening_balance_rub.label("amount_rub"),
+        literal(None, type_=Numeric(12, 6)).label("fx_locked"),
+        literal(None, type_=Numeric(10, 6)).label("subscription_usd"),
+        OpeningBalance.source_note.label("note"),
+        literal(0).label("sort_rank"),
+        OpeningBalance.id.label("entry_id"),
+    ).where(OpeningBalance.member_id == member_id)
 
-    for payment in (
-        session.query(Payment)
-        .filter(Payment.member_id == member_id)
-        .order_by(Payment.payment_date, Payment.id)
-        .all()
-    ):
-        entries.append(
-            (
-                payment.payment_date,
-                "payment",
-                payment.rub_paid,
-                "Payment received",
-                None,
-                None,
-                payment.note,
-            )
-        )
+    charges_select = select(
+        MemberCharge.charge_date.label("entry_date"),
+        literal("charge").label("entry_type"),
+        (-MemberCharge.charge_rub).label("amount_rub"),
+        MemberCharge.fx_locked.label("fx_locked"),
+        MemberCharge.subscription_usd.label("subscription_usd"),
+        literal(None, type_=Text()).label("note"),
+        literal(1).label("sort_rank"),
+        MemberCharge.id.label("entry_id"),
+    ).where(MemberCharge.member_id == member_id)
 
-    for adjustment in (
-        session.query(Adjustment)
-        .filter(Adjustment.member_id == member_id)
-        .order_by(Adjustment.effective_date, Adjustment.id)
-        .all()
-    ):
-        entries.append(
-            (
-                adjustment.effective_date,
-                "adjustment",
-                adjustment.amount_rub,
-                "Adjustment",
-                None,
-                None,
-                adjustment.reason,
-            )
-        )
+    payments_select = select(
+        Payment.payment_date.label("entry_date"),
+        literal("payment").label("entry_type"),
+        Payment.rub_paid.label("amount_rub"),
+        literal(None, type_=Numeric(12, 6)).label("fx_locked"),
+        literal(None, type_=Numeric(10, 6)).label("subscription_usd"),
+        Payment.note.label("note"),
+        literal(3).label("sort_rank"),
+        Payment.id.label("entry_id"),
+    ).where(Payment.member_id == member_id)
 
-    entries.sort(key=lambda value: (value[0], _entry_sort_rank(value[1])))
+    adjustments_select = select(
+        Adjustment.effective_date.label("entry_date"),
+        literal("adjustment").label("entry_type"),
+        Adjustment.amount_rub.label("amount_rub"),
+        literal(None, type_=Numeric(12, 6)).label("fx_locked"),
+        literal(None, type_=Numeric(10, 6)).label("subscription_usd"),
+        Adjustment.reason.label("note"),
+        literal(2).label("sort_rank"),
+        Adjustment.id.label("entry_id"),
+    ).where(Adjustment.member_id == member_id)
+
+    entries_query = union_all(
+        opening_select,
+        charges_select,
+        payments_select,
+        adjustments_select,
+    ).subquery()
+
+    rows = session.execute(
+        select(
+            entries_query.c.entry_date,
+            entries_query.c.entry_type,
+            entries_query.c.amount_rub,
+            entries_query.c.fx_locked,
+            entries_query.c.subscription_usd,
+            entries_query.c.note,
+        ).order_by(
+            entries_query.c.entry_date,
+            entries_query.c.sort_rank,
+            entries_query.c.entry_id,
+        )
+    ).all()
 
     running_balance = ZERO
+    last_payment_date: date | None = None
     statement_entries: list[StatementEntry] = []
-    for entry_date, entry_type, amount_rub, description, fx_locked, subscription_usd, note in entries:
-        running_balance += amount_rub
+    for entry_date, entry_type, amount_rub, fx_locked, subscription_usd, note in rows:
+        amount = amount_rub or ZERO
+        running_balance += amount
+        if entry_type == "charge":
+            description = f"Monthly charge for {entry_date.strftime('%B %Y')}"
+        elif entry_type == "payment":
+            description = "Payment received"
+            last_payment_date = entry_date
+        elif entry_type == "adjustment":
+            description = "Adjustment"
+        else:
+            description = "Opening balance"
+
         statement_entries.append(
             StatementEntry(
                 entry_date=entry_date,
                 entry_type=entry_type,
                 description=description,
-                amount_rub=amount_rub,
+                amount_rub=amount,
                 balance_rub=running_balance,
                 fx_locked=fx_locked,
                 subscription_usd=subscription_usd,
@@ -224,17 +243,15 @@ def get_member_statement(session: Session, member_id: int) -> MemberStatement:
             )
         )
 
-    last_payment_date = (
-        session.query(func.max(Payment.payment_date))
-        .filter(Payment.member_id == member_id)
-        .scalar()
-    )
+    if exact_through_date is None:
+        exact_through_date = get_ledger_status(session).exact_through_date
+
     return MemberStatement(
-        member_id=member.id,
-        display_name=member.display_name,
+        member_id=member_row.id,
+        display_name=member_row.display_name,
         current_balance_rub=running_balance,
         last_payment_date=last_payment_date,
-        exact_through_date=status.exact_through_date,
+        exact_through_date=exact_through_date,
         entries=statement_entries,
     )
 
@@ -287,12 +304,3 @@ def list_admin_reconciliation_history(session: Session, limit: int = 20) -> list
         for row in rows
     ]
 
-
-def _entry_sort_rank(entry_type: str) -> int:
-    order = {
-        "opening_balance": 0,
-        "charge": 1,
-        "adjustment": 2,
-        "payment": 3,
-    }
-    return order.get(entry_type, 99)

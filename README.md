@@ -138,7 +138,7 @@ That direction is correct. The next step is to make the implementation more expl
 
 ## V2 Direction
 
-The target design is a small ledger centered on:
+The current v2 implementation is a small ledger centered on:
 
 - **members**
 - **posted monthly cycles**
@@ -146,9 +146,26 @@ The target design is a small ledger centered on:
 - **RUB payments**
 - **reconciliation runs**
 
-The system should feel like a tiny receivables ledger with Spotify-specific automation, not like a generic admin console.
+The system now behaves like a tiny receivables ledger with Spotify-specific automation, not like a generic admin console.
 
 See [docs/v2_blueprint.md](/home/abocha/code/spotify-family-ledger/docs/v2_blueprint.md) for the concrete v2 architecture and workflow.
+
+## Current Implementation
+
+The current app is live and built around three pages:
+
+- **Home**: public health/status, balances, and recent payments
+- **Statements**: public per-member statement view with explicit member selection
+- **Admin**: admin-only member management, payment entry, adjustments, and manual reconciliation retry
+
+Important implementation details:
+
+- navigation uses Streamlit `st.navigation` / `st.Page`
+- startup reconciliation runs once per session and caches its result
+- balances and statements are integrity-gated before being shown
+- read models use `st.cache_data`
+- stale ledgers remain readable, but normal financial writes are disabled until healthy again
+- query paths have been optimized for remote latency on Streamlit Cloud + Turso
 
 ## Setup
 
@@ -172,6 +189,7 @@ See [docs/v2_blueprint.md](/home/abocha/code/spotify-family-ledger/docs/v2_bluep
    Notes:
    - `TURSO_URL` can point to local SQLite or a remote libSQL/Turso database.
    - `EXCHANGERATE_API_KEY` is still accepted as a temporary fallback during migration, but new setups should use `CURRENCYBEACON_API_KEY`.
+   - `ADMIN_PASSWORD_HASH` is optional for local public browsing, but required if you want local admin mode.
 
 3. Initialize database
    ```bash
@@ -199,12 +217,21 @@ See [docs/v2_blueprint.md](/home/abocha/code/spotify-family-ledger/docs/v2_bluep
    SUBSCRIPTION_USD = "8.00"
    CUTOVER_DATE = "2026-04-20"
    CURRENCYBEACON_API_KEY = "your_key_here"
+   ADMIN_PASSWORD_HASH = "your_bcrypt_hash_here"
+   ```
+
+   Optional but recommended:
+   ```toml
+   TELEGRAM_BOT_TOKEN = "your_bot_token"
+   TELEGRAM_CHAT_ID = "your_chat_id"
    ```
 
 3. Ensure the database schema has been migrated before deployment:
    ```bash
    uv run alembic upgrade head
    ```
+
+4. Seed or import real members and opening balances before first real use.
 
 ## Development Commands
 

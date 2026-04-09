@@ -10,6 +10,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -102,6 +103,10 @@ class ReconciliationRun(Base):
 
     cycles: Mapped[list["BillingCycle"]] = relationship("BillingCycle", back_populates="reconciliation_run")
 
+    __table_args__ = (
+        Index("ix_reconciliation_runs_started_at", "started_at"),
+    )
+
 
 class BillingCycle(Base):
     __tablename__ = "billing_cycles"
@@ -151,7 +156,11 @@ class MemberCharge(Base):
     cycle: Mapped["BillingCycle"] = relationship("BillingCycle", back_populates="charges")
     member: Mapped["Member"] = relationship("Member", back_populates="charges")
 
-    __table_args__ = (UniqueConstraint("cycle_id", "member_id", name="uq_member_charge_cycle_member"),)
+    __table_args__ = (
+        UniqueConstraint("cycle_id", "member_id", name="uq_member_charge_cycle_member"),
+        Index("ix_member_charges_member_id", "member_id"),
+        Index("ix_member_charges_charge_date", "charge_date"),
+    )
 
 
 class Payment(Base):
@@ -169,6 +178,11 @@ class Payment(Base):
     )
 
     member: Mapped["Member"] = relationship("Member", back_populates="payments")
+
+    __table_args__ = (
+        Index("ix_payments_member_id", "member_id"),
+        Index("ix_payments_payment_date", "payment_date"),
+    )
 
 
 class Adjustment(Base):
@@ -193,6 +207,11 @@ class Adjustment(Base):
     related_cycle: Mapped["BillingCycle | None"] = relationship(
         "BillingCycle",
         back_populates="adjustments",
+    )
+
+    __table_args__ = (
+        Index("ix_adjustments_member_id", "member_id"),
+        Index("ix_adjustments_effective_date", "effective_date"),
     )
 
 
