@@ -1,14 +1,16 @@
-import pytest
 from datetime import date
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from ledger.models import Base, Member
 
+
 @pytest.fixture
 def engine():
     return create_engine("sqlite:///:memory:", echo=False)
+
 
 @pytest.fixture
 def tables(engine):
@@ -16,37 +18,39 @@ def tables(engine):
     yield
     Base.metadata.drop_all(engine)
 
+
 @pytest.fixture
 def session(engine, tables):
-    SessionLocal = sessionmaker(bind=engine)
+    SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
     session = SessionLocal()
     try:
         yield session
     finally:
-        session.rollback() # wipe data for next test
+        session.rollback()
         session.close()
+
 
 @pytest.fixture
 def active_member(session):
-    m = Member(
+    member = Member(
         display_name="Test Active",
-        active_from=date(2023, 1, 1),
+        active_from=date(2026, 4, 20),
         counted_in_denominator=True,
-        billable_after_cutover=True
+        billable_after_cutover=True,
     )
-    session.add(m)
+    session.add(member)
     session.commit()
-    return m
+    return member
+
 
 @pytest.fixture
-def inactive_member(session):
-    m = Member(
-        display_name="Test Inactive",
-        active_from=date(2023, 1, 1),
-        active_to=date(2024, 1, 1),
-        counted_in_denominator=False,
-        billable_after_cutover=False
+def second_active_member(session):
+    member = Member(
+        display_name="Second Active",
+        active_from=date(2026, 4, 20),
+        counted_in_denominator=True,
+        billable_after_cutover=True,
     )
-    session.add(m)
+    session.add(member)
     session.commit()
-    return m
+    return member

@@ -6,221 +6,124 @@ import pandas as pd
 import streamlit as st
 
 from ledger.database import get_db
-from ledger.services import (
-    check_integrity,
-    fetch_market_rate,
-    get_latest_fx_rate,
-    get_member_balances,
-    get_next_unposted_cycle,
-    list_all_cycles,
-    list_fx_rates,
-    list_payments,
-    preview_cycle,
+from ledger.services.integrity import check_integrity
+from ledger.services.queries import (
+    get_ledger_status,
+    get_member_statement,
+    list_admin_reconciliation_history,
+    list_member_balances,
+    list_recent_payments,
 )
 
-ZERO = Decimal("0")
+
+def _money_label(balance_rub: Decimal) -> str:
+    if balance_rub < 0:
+        return "owes owner"
+    if balance_rub > 0:
+        return "has credit"
+    return "settled"
 
 
-def _decimal_to_float(value: Decimal | None) -> float | None:
-    return float(value) if value is not None else None
-
-
-@st.cache_data(ttl=300, show_spinner=False, max_entries=64)
-def load_dashboard_data() -> dict:
+@st.cache_data(show_spinner=False)
+def load_integrity_issues() -> list[dict]:
     with get_db() as session:
-        balances = get_member_balances(session)
-        next_cycle = get_next_unposted_cycle(session)
-        latest_fx = get_latest_fx_rate(session)
-        recent_payments = list_payments(session, limit=5)
+        return [issue.model_dump() for issue in check_integrity(session)]
 
-    owed_total = float(sum(-b.balance_rub for b in balances if b.balance_rub < 0))
+
+@st.cache_data(show_spinner=False)
+def load_home_data() -> dict:
+    with get_db() as session:
+        status = get_ledger_status(session)
+        balances = list_member_balances(session)
+        recent_payments = list_recent_payments(session, limit=8)
 
     balances_df = pd.DataFrame(
         [
             {
-                "Member": b.display_name,
-                "Balance (RUB)": float(b.balance_rub),
-                "Status": (
-                    "✅has credit"
-                    if b.balance_rub > 0
-                    else ("❌owes owner" if b.balance_rub < 0 else "✅settled")
-                ),
+                "Member": balance.display_name,
+                "Balance (RUB)": float(balance.balance_rub),
+                "Status": _money_label(balance.balance_rub),
+                "Last Payment": balance.last_payment_date,
+                "Last Charged Month": balance.last_charge_date,
             }
-            for b in balances
-            if b.balance_rub != 0
+            for balance in balances
         ]
     )
 
     recent_payments_df = pd.DataFrame(
         [
             {
-                "Date": p.payment_date,
-                "Member": p.display_name,
-                "RUB": float(p.rub_paid),
-                "Recorded Credit (RUB)": float(p.rub_credit),
+                "Date": payment.payment_date,
+                "Member": payment.display_name,
+                "RUB Paid": float(payment.rub_paid),
+                "Note": payment.note,
             }
-            for p in recent_payments
+            for payment in recent_payments
         ]
     )
 
+    total_owed = float(sum((-balance.balance_rub for balance in balances if balance.balance_rub < 0), Decimal("0")))
     return {
+        "status": status.model_dump(mode="json"),
         "balances_df": balances_df,
-        "balances_count": len(balances),
-        "owed_total": owed_total,
-        "next_cycle_date": next_cycle.cycle_date if next_cycle else None,
-        "latest_fx": (
-            {
-                "usd_rub": float(latest_fx.usd_rub),
-                "source": latest_fx.source,
-                "rate_date": latest_fx.rate_date,
-            }
-            if latest_fx
-            else None
-        ),
         "recent_payments_df": recent_payments_df,
+        "total_owed_rub": total_owed,
     }
 
 
-@st.cache_data(ttl=3600, show_spinner=False, max_entries=16)
-def load_integrity_issues() -> list[dict]:
+@st.cache_data(show_spinner=False)
+def load_statement_data(member_id: int) -> dict:
     with get_db() as session:
-        return [issue.model_dump() for issue in check_integrity(session)]
+        statement = get_member_statement(session, member_id)
 
-
-@st.cache_data(ttl=3600, show_spinner=False, max_entries=8)
-def load_market_rate_value() -> float | None:
-    return fetch_market_rate()
-
-
-@st.cache_data(ttl=300, show_spinner=False, max_entries=64)
-def load_cycles_history_df() -> pd.DataFrame:
-    with get_db() as session:
-        cycles = list_all_cycles(session)
-
-    return pd.DataFrame(
+    entries_df = pd.DataFrame(
         [
             {
-                "Date": c.cycle_date,
-                "Status": c.status,
-                "Subscription USD": float(c.subscription_usd),
-                "Subscription RUB": float(c.subscription_rub) if c.subscription_rub is not None else None,
-                "Counted / Billed": f"{c.counted_active or '-'} / {c.billed_active or '-'}",
-                "Owner Subsidy RUB": float(c.owner_subsidy_rub) if c.owner_subsidy_rub is not None else None,
-                "Posted At": c.posted_at.strftime("%Y-%m-%d %H:%M:%S") if c.posted_at else None,
+                "Date": entry.entry_date,
+                "Type": entry.entry_type.replace("_", " ").title(),
+                "Description": entry.description,
+                "Amount (RUB)": float(entry.amount_rub),
+                "Running Balance (RUB)": float(entry.balance_rub),
+                "FX Locked": float(entry.fx_locked) if entry.fx_locked is not None else None,
+                "Subscription USD": float(entry.subscription_usd) if entry.subscription_usd is not None else None,
+                "Note": entry.note,
             }
-            for c in cycles
+            for entry in statement.entries
         ]
     )
-
-
-@st.cache_data(ttl=300, show_spinner=False, max_entries=64)
-def load_payments_history_df() -> pd.DataFrame:
-    with get_db() as session:
-        payments = list_payments(session)
-
-    return pd.DataFrame(
-        [
-            {
-                "Date": p.payment_date,
-                "Member": p.display_name,
-                "RUB Paid": float(p.rub_paid),
-                "Recorded Credit (RUB)": float(p.rub_credit),
-                "Note": p.note,
-                "Logged At": p.created_at.strftime("%Y-%m-%d %H:%M:%S"),
-            }
-            for p in payments
-        ]
-    )
-
-
-@st.cache_data(ttl=300, show_spinner=False, max_entries=64)
-def load_fx_rates_history_df() -> pd.DataFrame:
-    with get_db() as session:
-        fx_rates = list_fx_rates(session)
-
-    return pd.DataFrame(
-        [
-            {
-                "Date": fx.rate_date,
-                "USD/RUB": float(fx.usd_rub),
-                "Source": fx.source,
-                "Imported At": fx.imported_at.strftime("%Y-%m-%d %H:%M:%S"),
-            }
-            for fx in fx_rates
-        ]
-    )
-
-
-@st.cache_data(ttl=300, show_spinner=False, max_entries=64)
-def load_members_table_df() -> pd.DataFrame:
-    """Load member balances as a dataframe for display."""
-    with get_db() as session:
-        balances = get_member_balances(session)
-
-    return pd.DataFrame(
-        [
-            {
-                "Member": b.display_name,
-                "Active": "✅" if b.is_active else "❌",
-                "Counted": "✅" if b.counted_in_denominator else "—",
-                "Billable": "✅" if b.billable_after_cutover else "—",
-                "Legacy Opening (RUB)": float(b.legacy_opening_rub),
-                "Charges (RUB)": float(b.posted_charges_rub),
-                "Payments (RUB)": float(b.payment_credits_rub),
-                "Balance (RUB)": float(b.balance_rub),
-                "USD Equivalent": float(b.balance_usd_equivalent) if b.balance_usd_equivalent is not None else None,
-            }
-            for b in balances
-        ]
-    )
-
-
-@st.cache_data(ttl=300, show_spinner=False, max_entries=64)
-def load_next_cycle_preview_data() -> dict:
-    """Load the next unposted cycle preview as plain dicts/dataframes."""
-    with get_db() as session:
-        next_cycle = get_next_unposted_cycle(session)
-        if not next_cycle:
-            return {"state": "empty"}
-
-        try:
-            preview = preview_cycle(session, next_cycle.id)
-        except ValueError as exc:
-            return {
-                "state": "error",
-                "message": str(exc),
-            }
-
-    # Return plain dict representation of preview for page 3
     return {
-        "state": "ok",
-        "cycle_id": preview.cycle_id,
-        "cycle_date": preview.cycle_date,
-        "subscription_usd": float(preview.subscription_usd),
-        "subscription_rub": _decimal_to_float(preview.subscription_rub),
-        "counted_active": preview.counted_active,
-        "billed_active": preview.billed_active,
-        "rub_per_slot": _decimal_to_float(preview.rub_per_slot),
-        "total_billed_rub": _decimal_to_float(preview.total_billed_rub),
-        "owner_subsidy_rub": _decimal_to_float(preview.owner_subsidy_rub),
-        "fx_rate": _decimal_to_float(preview.fx_rate),
-        "fx_available": preview.fx_available,
-        "estimated_fx_rate": _decimal_to_float(preview.estimated_fx_rate),
-        "estimated_subscription_rub": _decimal_to_float(preview.estimated_subscription_rub),
-        "estimated_rub_per_slot": _decimal_to_float(preview.estimated_rub_per_slot),
-        "estimated_total_billed_rub": _decimal_to_float(preview.estimated_total_billed_rub),
-        "estimated_owner_subsidy_rub": _decimal_to_float(preview.estimated_owner_subsidy_rub),
-        "uses_estimated_fx": preview.uses_estimated_fx,
-        "member_charges": [
-            {
-                "member_id": mc.member_id,
-                "display_name": mc.display_name,
-                "counted": mc.counted,
-                "billable": mc.billable,
-                "charge_usd": float(mc.charge_usd),
-                "charge_rub": _decimal_to_float(mc.charge_rub),
-                "estimated_charge_rub": _decimal_to_float(mc.estimated_charge_rub),
-            }
-            for mc in preview.member_charges
-        ],
+        "statement": statement.model_dump(mode="json"),
+        "entries_df": entries_df,
     }
+
+
+@st.cache_data(show_spinner=False)
+def load_member_options() -> list[tuple[int, str]]:
+    with get_db() as session:
+        balances = list_member_balances(session)
+    return [(balance.member_id, balance.display_name) for balance in balances]
+
+
+@st.cache_data(show_spinner=False)
+def load_admin_reconciliation_history() -> pd.DataFrame:
+    with get_db() as session:
+        history = list_admin_reconciliation_history(session, limit=30)
+
+    return pd.DataFrame(
+        [
+            {
+                "Started At": item.started_at,
+                "Trigger": item.trigger,
+                "Status": item.status,
+                "From": item.from_cycle_date,
+                "To": item.to_cycle_date,
+                "Exact Through": item.last_successful_cycle_date,
+                "Failure Cycle": item.error_cycle_date,
+                "Failure Message": item.error_message,
+                "Cycles Posted": item.cycles_posted_count,
+                "Alert Sent": item.alert_sent,
+                "Alert Error": item.alert_error,
+            }
+            for item in history
+        ]
+    )

@@ -1,9 +1,37 @@
-"""Pydantic schemas for commands (inputs) and views (outputs)."""
+"""Pydantic schemas for commands and read models."""
+
+from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, field_validator
+
+
+class SaveMemberCommand(BaseModel):
+    member_id: int | None = None
+    display_name: str
+    active_from: date
+    active_to: date | None = None
+    counted_in_denominator: bool
+    billable_after_cutover: bool
+    note: str | None = None
+
+    @field_validator("display_name")
+    @classmethod
+    def validate_display_name(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("Display name is required.")
+        return normalized
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = "\n".join(line.rstrip() for line in value.strip().splitlines())
+        return normalized or None
 
 
 class RecordPaymentCommand(BaseModel):
@@ -14,55 +42,63 @@ class RecordPaymentCommand(BaseModel):
 
     @field_validator("rub_paid")
     @classmethod
-    def rub_must_be_positive(cls, v: Decimal) -> Decimal:
-        if v <= 0:
-            raise ValueError("RUB amount must be positive")
-        return v
+    def positive_amount(cls, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise ValueError("Payment amount must be positive.")
+        return value
 
-
-class EditPaymentCommand(BaseModel):
-    payment_id: int
-    rub_paid: Decimal
-    note: str | None = None
-    edit_reason: str
-
-    @field_validator("rub_paid")
+    @field_validator("note")
     @classmethod
-    def rub_must_be_positive(cls, v: Decimal) -> Decimal:
-        if v <= 0:
-            raise ValueError("RUB amount must be positive")
-        return v
+    def normalize_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.split())
+        return normalized or None
 
-    @field_validator("edit_reason")
+
+class CreateAdjustmentCommand(BaseModel):
+    member_id: int
+    effective_date: date
+    amount_rub: Decimal
+    reason: str
+    related_cycle_id: int | None = None
+
+    @field_validator("amount_rub")
     @classmethod
-    def reason_must_exist(cls, v: str) -> str:
-        if not v.strip():
-            raise ValueError("Edit reason is required")
-        return " ".join(v.split())
+    def non_zero_amount(cls, value: Decimal) -> Decimal:
+        if value == 0:
+            raise ValueError("Adjustment amount must be non-zero.")
+        return value
 
-
-class EditChargeCommand(BaseModel):
-    charge_id: int
-    charge_rub: Decimal
-    edit_reason: str
-
-    @field_validator("charge_rub")
+    @field_validator("reason")
     @classmethod
-    def positive_decimal(cls, v: Decimal) -> Decimal:
-        if v <= 0:
-            raise ValueError("Charge amount must be positive")
-        return v
-
-    @field_validator("edit_reason")
-    @classmethod
-    def reason_must_exist(cls, v: str) -> str:
-        if not v.strip():
-            raise ValueError("Edit reason is required")
-        return " ".join(v.split())
+    def normalize_reason(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("Adjustment reason is required.")
+        return normalized
 
 
-class PostCycleCommand(BaseModel):
-    cycle_id: int
+class ReconciliationOutcome(BaseModel):
+    state: str
+    exact_through_date: date | None
+    last_attempted_cycle_date: date | None
+    failure_cycle_date: date | None
+    failure_message: str | None
+    cycles_posted_count: int
+    alert_sent: bool
+
+
+class LedgerStatus(BaseModel):
+    state: str
+    exact_through_date: date | None
+    last_attempted_cycle_date: date | None
+    failure_cycle_date: date | None
+    failure_message: str | None
+    cycles_posted_count: int
+    alert_sent: bool
+    last_completed_at: datetime | None
+    last_run_trigger: str | None
 
 
 class MemberBalance(BaseModel):
@@ -73,82 +109,59 @@ class MemberBalance(BaseModel):
     is_active: bool
     counted_in_denominator: bool
     billable_after_cutover: bool
-    legacy_opening_rub: Decimal
-    posted_charges_rub: Decimal
-    payment_credits_rub: Decimal
+    opening_balance_rub: Decimal
+    charges_rub: Decimal
+    payments_rub: Decimal
+    adjustments_rub: Decimal
     balance_rub: Decimal
-    balance_usd_equivalent: Decimal | None
+    last_payment_date: date | None
+    last_charge_date: date | None
 
 
-class CyclePreview(BaseModel):
-    cycle_id: int
-    cycle_date: date
-    subscription_usd: Decimal
-    subscription_rub: Decimal | None
-    counted_active: int
-    billed_active: int
-    rub_per_slot: Decimal | None
-    total_billed_rub: Decimal | None
-    owner_subsidy_rub: Decimal | None
-    fx_rate: Decimal | None
-    fx_available: bool
-    estimated_fx_rate: Decimal | None = None
-    estimated_subscription_rub: Decimal | None = None
-    estimated_rub_per_slot: Decimal | None = None
-    estimated_total_billed_rub: Decimal | None = None
-    estimated_owner_subsidy_rub: Decimal | None = None
-    uses_estimated_fx: bool = False
-    member_charges: list["MemberChargePreview"]
+class StatementEntry(BaseModel):
+    entry_date: date
+    entry_type: str
+    description: str
+    amount_rub: Decimal
+    balance_rub: Decimal
+    fx_locked: Decimal | None = None
+    subscription_usd: Decimal | None = None
+    note: str | None = None
 
 
-class MemberChargePreview(BaseModel):
+class MemberStatement(BaseModel):
     member_id: int
     display_name: str
-    counted: bool
-    billable: bool
-    charge_usd: Decimal
-    charge_rub: Decimal | None
-    estimated_charge_rub: Decimal | None = None
-
-
-class PaymentPreview(BaseModel):
-    member_id: int
-    display_name: str
-    payment_date: date
-    rub_paid: Decimal
-    fx_rate: Decimal | None
-    fx_available: bool
-    rub_credit: Decimal | None
-
-
-class CycleSummary(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    cycle_date: date
-    status: str
-    subscription_usd: Decimal
-    subscription_rub: Decimal | None
-    counted_active: int | None
-    billed_active: int | None
-    total_billed_rub: Decimal | None
-    owner_subsidy_rub: Decimal | None
-    fx_locked: Decimal | None
-    posted_at: datetime | None
+    current_balance_rub: Decimal
+    last_payment_date: date | None
+    exact_through_date: date | None
+    entries: list[StatementEntry]
 
 
 class PaymentRecord(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
     id: int
     member_id: int
     display_name: str
     payment_date: date
     rub_paid: Decimal
-    fx_locked: Decimal | None
-    rub_credit: Decimal
     note: str | None
     created_at: datetime
+
+
+class ReconciliationRunRecord(BaseModel):
+    id: int
+    trigger: str
+    status: str
+    started_at: datetime
+    completed_at: datetime | None
+    from_cycle_date: date | None
+    to_cycle_date: date | None
+    last_successful_cycle_date: date | None
+    error_cycle_date: date | None
+    error_message: str | None
+    cycles_posted_count: int
+    alert_sent: bool
+    alert_error: str | None
 
 
 class IntegrityIssue(BaseModel):

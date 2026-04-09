@@ -1,13 +1,6 @@
-"""SQLAlchemy ORM models for the Spotify Family Ledger.
+"""SQLAlchemy ORM models for Spotify Family Ledger v2."""
 
-The ledger is RUB-first.
-
-Main tables:
-  members, legacy_snapshot, fx_rates, charge_cycles, posted_charges, payments
-
-Legacy USD balances are imported once and converted to RUB on import.
-All ongoing accounting is in RUB.
-"""
+from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -17,6 +10,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Integer,
     Numeric,
     String,
     Text,
@@ -37,48 +31,42 @@ class Member(Base):
     display_name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
     active_from: Mapped[date] = mapped_column(Date, nullable=False)
     active_to: Mapped[date | None] = mapped_column(Date, nullable=True)
-
-    # If true, the member is counted in the total slot denominator
     counted_in_denominator: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-
-    # If true, the member receives a personal charge row when a cycle is posted
     billable_after_cutover: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    legacy_snapshot: Mapped["LegacySnapshot | None"] = relationship(
-        "LegacySnapshot", back_populates="member", uselist=False
+    opening_balance: Mapped["OpeningBalance | None"] = relationship(
+        "OpeningBalance",
+        back_populates="member",
+        uselist=False,
     )
-    posted_charges: Mapped[list["PostedCharge"]] = relationship(
-        "PostedCharge", back_populates="member"
-    )
+    charges: Mapped[list["MemberCharge"]] = relationship("MemberCharge", back_populates="member")
     payments: Mapped[list["Payment"]] = relationship("Payment", back_populates="member")
+    adjustments: Mapped[list["Adjustment"]] = relationship("Adjustment", back_populates="member")
 
-    def is_active_on(self, d: date) -> bool:
-        """True if the member is within their active date range on the given date."""
-        if d < self.active_from:
+    def is_active_on(self, value: date) -> bool:
+        if value < self.active_from:
             return False
-        if self.active_to is not None and d >= self.active_to:
+        if self.active_to is not None and value >= self.active_to:
             return False
         return True
 
 
-class LegacySnapshot(Base):
-    """Frozen opening balance imported once from the legacy spreadsheet."""
-
-    __tablename__ = "legacy_snapshot"
+class OpeningBalance(Base):
+    __tablename__ = "opening_balances"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    member_id: Mapped[int] = mapped_column(ForeignKey("members.id"), nullable=False, unique=True)
+    member_id: Mapped[int] = mapped_column(ForeignKey("members.id"), nullable=False)
     snapshot_date: Mapped[date] = mapped_column(Date, nullable=False)
-
-    # All monetary fields in RUB
     opening_balance_rub: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
-
     source_usd_balance: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), nullable=True)
     source_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    member: Mapped["Member"] = relationship("Member", back_populates="legacy_snapshot")
+    member: Mapped["Member"] = relationship("Member", back_populates="opening_balance")
+
+    __table_args__ = (
+        UniqueConstraint("member_id", name="uq_opening_balance_member"),
+    )
 
 
 class FxRate(Base):
@@ -88,97 +76,130 @@ class FxRate(Base):
     usd_rub: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False)
     source: Mapped[str | None] = mapped_column(String(200), nullable=True)
     imported_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
     )
 
 
-class ChargeCycle(Base):
-    __tablename__ = "charge_cycles"
+class ReconciliationRun(Base):
+    __tablename__ = "reconciliation_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    trigger: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    from_cycle_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    to_cycle_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    last_successful_cycle_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    error_cycle_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cycles_posted_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    alert_sent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    alert_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    app_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    cycles: Mapped[list["BillingCycle"]] = relationship("BillingCycle", back_populates="reconciliation_run")
+
+
+class BillingCycle(Base):
+    __tablename__ = "billing_cycles"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     cycle_date: Mapped[date] = mapped_column(Date, nullable=False, unique=True)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="forecast")
-
-    # The subscription cost is defined in USD but charged in RUB
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="posted")
     subscription_usd: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False)
-    subscription_rub: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
-
-    counted_active: Mapped[int | None] = mapped_column(nullable=True)
-    billed_active: Mapped[int | None] = mapped_column(nullable=True)
-
-    total_billed_rub: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
-    owner_subsidy_rub: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
-
-    # The FX rate used to lock the RUB cost for this cycle
-    fx_locked: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
-
-    posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-    charges: Mapped[list["PostedCharge"]] = relationship("PostedCharge", back_populates="cycle")
-
-
-class PostedCharge(Base):
-    """Immutable record of a charge applied to a member for a specific cycle."""
-
-    __tablename__ = "posted_charges"
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    cycle_id: Mapped[int] = mapped_column(ForeignKey("charge_cycles.id"), nullable=False)
-    member_id: Mapped[int] = mapped_column(ForeignKey("members.id"), nullable=False)
-
-    charge_date: Mapped[date] = mapped_column(Date, nullable=False)
-
-    # Denominator used at the time of posting
-    active_count: Mapped[int] = mapped_column(nullable=False)
-
-    # Original USD reference
-    subscription_usd: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False)
-    charge_usd: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False)
-
-    # Effective RUB charge
     fx_locked: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False)
-    charge_rub: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
-
-    billable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+    subscription_rub: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    counted_active: Mapped[int] = mapped_column(Integer, nullable=False)
+    billed_active: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_billed_rub: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    owner_subsidy_rub: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    posted_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    reconciliation_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("reconciliation_runs.id"),
+        nullable=True,
     )
 
-    # Audit trail for rare manual edits
-    edited_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    edit_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reconciliation_run: Mapped["ReconciliationRun | None"] = relationship(
+        "ReconciliationRun",
+        back_populates="cycles",
+    )
+    charges: Mapped[list["MemberCharge"]] = relationship("MemberCharge", back_populates="cycle")
+    adjustments: Mapped[list["Adjustment"]] = relationship("Adjustment", back_populates="related_cycle")
 
-    member: Mapped["Member"] = relationship("Member", back_populates="posted_charges")
-    cycle: Mapped["ChargeCycle"] = relationship("ChargeCycle", back_populates="charges")
 
-    __table_args__ = (UniqueConstraint("cycle_id", "member_id", name="uq_cycle_member"),)
+class MemberCharge(Base):
+    __tablename__ = "member_charges"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    cycle_id: Mapped[int] = mapped_column(ForeignKey("billing_cycles.id"), nullable=False)
+    member_id: Mapped[int] = mapped_column(ForeignKey("members.id"), nullable=False)
+    charge_date: Mapped[date] = mapped_column(Date, nullable=False)
+    active_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    subscription_usd: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False)
+    charge_usd: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False)
+    fx_locked: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False)
+    charge_rub: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    cycle: Mapped["BillingCycle"] = relationship("BillingCycle", back_populates="charges")
+    member: Mapped["Member"] = relationship("Member", back_populates="charges")
+
+    __table_args__ = (UniqueConstraint("cycle_id", "member_id", name="uq_member_charge_cycle_member"),)
 
 
 class Payment(Base):
-    """Immutable record of a payment made by a member."""
-
     __tablename__ = "payments"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     member_id: Mapped[int] = mapped_column(ForeignKey("members.id"), nullable=False)
     payment_date: Mapped[date] = mapped_column(Date, nullable=False)
-
-    # RUB amount actually paid
     rub_paid: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
-
-    # For RUB-first, fx_locked is effectively 1.0
-    fx_locked: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False, default=Decimal(1))
-    usd_credit: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
-
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
-
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now()
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
     )
 
-    # Audit trail
-    edited_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    edit_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-
     member: Mapped["Member"] = relationship("Member", back_populates="payments")
+
+
+class Adjustment(Base):
+    __tablename__ = "adjustments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    member_id: Mapped[int] = mapped_column(ForeignKey("members.id"), nullable=False)
+    effective_date: Mapped[date] = mapped_column(Date, nullable=False)
+    amount_rub: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+    )
+    related_cycle_id: Mapped[int | None] = mapped_column(
+        ForeignKey("billing_cycles.id"),
+        nullable=True,
+    )
+
+    member: Mapped["Member"] = relationship("Member", back_populates="adjustments")
+    related_cycle: Mapped["BillingCycle | None"] = relationship(
+        "BillingCycle",
+        back_populates="adjustments",
+    )
+
+
+class JobLock(Base):
+    __tablename__ = "job_locks"
+
+    name: Mapped[str] = mapped_column(String(100), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    acquired_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

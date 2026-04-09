@@ -1,58 +1,78 @@
 from datetime import date
 from decimal import Decimal
 
-from ledger.models import ChargeCycle, LegacySnapshot, PostedCharge
-from ledger.schemas import RecordPaymentCommand
-from ledger.services.cycles import post_cycle
-from ledger.services.fx import add_fx_rate
+from ledger.models import BillingCycle, MemberCharge, OpeningBalance
 from ledger.services.integrity import check_integrity
-from ledger.services.payments import record_payment
 
 
-def test_integrity_clean(session, active_member):
-    snap = LegacySnapshot(
-        member_id=active_member.id,
-        snapshot_date=date(2026, 4, 1),
-        opening_balance_rub=Decimal("10.00"),
+def test_integrity_is_clean_for_consistent_cycle(session, active_member):
+    session.add(
+        OpeningBalance(
+            member_id=active_member.id,
+            snapshot_date=date(2026, 4, 20),
+            opening_balance_rub=Decimal("-100.00"),
+            source_note="Cutover",
+        )
     )
-    session.add(snap)
-    session.commit()
-
-    issues = check_integrity(session)
-    assert issues == []
-
-
-def test_integrity_flags_mismatched_payment_math(session, active_member):
-    cmd = RecordPaymentCommand(
-        member_id=active_member.id,
-        payment_date=date(2026, 1, 1),
-        rub_paid=Decimal("1000"),
+    cycle = BillingCycle(
+        cycle_date=date(2026, 4, 20),
+        status="posted",
+        subscription_usd=Decimal("8.00"),
+        fx_locked=Decimal("100.00"),
+        subscription_rub=Decimal("800.00"),
+        counted_active=1,
+        billed_active=1,
+        total_billed_rub=Decimal("800.00"),
+        owner_subsidy_rub=Decimal("0.00"),
+        posted_at=date(2026, 4, 20),
     )
-    p = record_payment(session, cmd)
-    session.add(p)
+    session.add(cycle)
+    session.flush()
+    session.add(
+        MemberCharge(
+            cycle_id=cycle.id,
+            member_id=active_member.id,
+            charge_date=cycle.cycle_date,
+            active_count=1,
+            subscription_usd=Decimal("8.00"),
+            charge_usd=Decimal("8.00"),
+            fx_locked=Decimal("100.00"),
+            charge_rub=Decimal("800.00"),
+        )
+    )
     session.commit()
 
-    p.usd_credit = Decimal("1100.0000")  # Corrupt credit field
+    assert check_integrity(session) == []
+
+
+def test_integrity_flags_cycle_total_mismatch(session, active_member):
+    cycle = BillingCycle(
+        cycle_date=date(2026, 4, 20),
+        status="posted",
+        subscription_usd=Decimal("8.00"),
+        fx_locked=Decimal("100.00"),
+        subscription_rub=Decimal("800.00"),
+        counted_active=1,
+        billed_active=1,
+        total_billed_rub=Decimal("700.00"),
+        owner_subsidy_rub=Decimal("100.00"),
+        posted_at=date(2026, 4, 20),
+    )
+    session.add(cycle)
+    session.flush()
+    session.add(
+        MemberCharge(
+            cycle_id=cycle.id,
+            member_id=active_member.id,
+            charge_date=cycle.cycle_date,
+            active_count=1,
+            subscription_usd=Decimal("8.00"),
+            charge_usd=Decimal("8.00"),
+            fx_locked=Decimal("100.00"),
+            charge_rub=Decimal("800.00"),
+        )
+    )
     session.commit()
 
     issues = check_integrity(session)
-    assert any("payment(s) whose RUB credit" in i.message for i in issues)
-
-
-def test_integrity_flags_mismatched_charge_math(session, active_member):
-    c = ChargeCycle(cycle_date=date(2026, 5, 20), subscription_usd=Decimal("8.00"))
-    session.add(c)
-    add_fx_rate(session, date(2026, 5, 20), 100.0)
-    session.commit()
-    post_cycle(session, c.id)
-    session.commit()
-
-    charge = session.query(PostedCharge).first()
-    assert charge is not None
-    # No charge_rub_equivalent anymore, renamed to charge_rub
-    charge.charge_rub = Decimal("999.0000")
-    session.commit()
-
-    issues = check_integrity(session)
-    # The error message in integrity.py says "whose RUB amount is inconsistent"
-    assert any("posted charge(s) whose RUB amount" in i.message for i in issues)
+    assert any("total_billed_rub" in issue.message for issue in issues)
