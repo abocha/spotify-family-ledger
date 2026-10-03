@@ -1,242 +1,146 @@
 # Spotify Family Ledger
 
-Spotify Family Ledger is a small, purpose-built ledger for one job:
+[![CI](https://github.com/abocha/spotify-family-ledger/actions/workflows/ci.yml/badge.svg)](https://github.com/abocha/spotify-family-ledger/actions/workflows/ci.yml)
 
-**automatically and credibly answer, for each member, "How much do I owe Andrei right now, and why?"**
+A small, self-healing accrual ledger for a shared Spotify Family subscription where the owner pays in USD and members reimburse in RUB.
 
-This project exists because the owner pays Spotify in **USD**, members reimburse in **RUB**, and the RUB/USD exchange rate is volatile enough that naive month-to-month accrual becomes unfair and impossible to explain. The old spreadsheet could not preserve historical accrual correctly. This app is meant to.
+**Live app:** https://spotify-family-ledger.streamlit.app/
 
-## The Real Mentality
+The core problem is not subscription management. It is preserving a fair, explainable history when exchange rates move, payments arrive irregularly, and the app may sleep for weeks between visits.
 
-This is not a generic finance app.
+## Core invariants
 
-This is not primarily a subscription management app.
+- **Posted months are the truth.**
+- **Historical FX is locked per billing month.**
+- **Wake-up reconciliation is idempotent.**
+- **Balances are derived, never hand-maintained.**
+- **If reconciliation cannot complete exactly, the app reports a degraded state instead of inventing certainty.**
 
-This is not a dashboard that happens to show balances.
+These constraints turn a tiny household utility into a useful accounting and reliability problem: historical data must remain stable, missed billing cycles must be reconstructed deterministically, and every displayed balance must be explainable from ledger events.
 
-This is a **self-healing accrual ledger** for a tiny shared-cost arrangement:
+## How it works
 
-- Spotify charges the owner automatically on a schedule.
-- The system must lock the historical FX for each billing month.
-- Members pay the owner back later, in RUB, on irregular dates and often in lump sums.
-- When the app wakes up after months of inactivity, it must catch up deterministically.
-- Members must be able to inspect the ledger and conclude that the math is fair.
-- Negative balances mean a member owes money and needs to pay up to settle.
+On startup, the app reconciles the ledger from the last known good billing cycle to the present:
 
-## Mantra
-
-- Posted months are the truth.
-- Historical FX is locked per month.
-- Wake-up reconciliation is idempotent.
-- Balances are derived, never hand-maintained.
-- If reconciliation fails, the app says so plainly.
-
-## Product Truths
-
-### 1. The purpose is trustable debt tracking
-
-The main output is not "admin convenience". The main output is a statement each member can inspect:
-
-- which months they were charged for
-- what FX was used each month
-- what they paid and when
-- what they owe now
-
-If a member cannot look at the statement and say "yes, this makes sense", the product failed.
-
-### 2. Automation is mandatory
-
-The owner should not need to remember routine monthly bookkeeping. If something is not recorded, it effectively does not exist. The app therefore needs to:
-
-- notice missed billing months
-- fetch historical USD/RUB rates automatically from CurrencyBeacon
-- post the missing monthly accruals
-- recover correctly after Streamlit Community Cloud sleep
-
-### 3. Historical FX is not a nice-to-have
-
-It is the core accounting requirement.
-
-Each monthly Spotify charge starts as a USD amount and becomes a RUB debt using that month's locked FX. Recomputing old months with a later FX rate would be unfair and would break trust.
-
-### 4. Reliability means fail-closed honesty
-
-If the system cannot reconcile a missing month exactly, it must not silently guess and pretend the current balances are exact.
-
-Instead it should say, clearly:
-
-- up to which month the ledger is exact
-- what month failed
-- why it failed
-- whether shown balances exclude unreconciled months
-
-Smooth-looking wrong numbers are worse than an explicit degraded state.
-
-### 5. Fast feels trustworthy
-
-The app should feel calm and under control.
-
-- A deliberate loading/reconciliation screen after a long sleep is acceptable.
-- Slow or janky navigation between normal screens is not.
-- Wake-up work should be isolated and visible.
-- Regular page views should mostly read from already-reconciled data.
-
-Performance is part of reliability here. If every screen feels sluggish, users will assume the numbers are shaky too.
-
-## Operating Constraints
-
-The product is intentionally built around free infrastructure:
-
-- **UI/runtime**: Streamlit Community Cloud
-- **database**: Turso / libSQL free tier
-- **FX provider**: CurrencyBeacon API
-
-This means the app will sleep most of the time. That is expected. The architecture must therefore optimize for **correct wake-up reconciliation**, not for always-on processing.
-
-## What The App Should Do
-
-On wake-up, the system should reconcile itself from the last known good posted month up to the present:
-
-1. Find the last posted cycle.
+1. Find the latest posted cycle.
 2. Determine which billing months are missing.
-3. For each missing month:
-   - fetch historical USD/RUB from CurrencyBeacon
-   - create the posted cycle
-   - create locked member charges
-4. Commit the month once it is fully consistent.
-5. Stop immediately on the first unreconcilable month.
+3. Fetch the historical USD/RUB rate for each missing month.
+4. Create the posted cycle and locked member charges.
+5. Commit each month only when it is internally consistent.
+6. Stop at the first unreconcilable month and surface that state explicitly.
 
-If all months reconcile, balances are exact.
+Members can inspect balances, historical charges, FX rates, and payments. Admin-only actions cover payment entry, member management, adjustments, and manual reconciliation retries.
 
-If one month fails, the app should remain truthful about what is exact and what is pending.
+## Architecture
 
-## Access Model
+```mermaid
+flowchart LR
+    U[Streamlit UI] --> B[Bootstrap / reconciliation]
+    U --> Q[Read models]
+    U --> W[Admin write actions]
 
-- Members should have read access to the ledger and their statements.
-- Only the admin should be able to record payments.
-- Only the admin should be able to introduce adjustments or corrections.
-- Other than those rare write actions, the system should run on its own.
+    B --> R[Reconciliation service]
+    R --> FX[CurrencyBeacon historical FX]
+    R --> DB[(Turso / libSQL)]
 
-## What The App Should Not Do
+    Q --> C[Read cache]
+    C --> DB
 
-- It should not depend on someone opening the app exactly on billing day.
-- It should not maintain balances as mutable stored fields.
-- It should not treat "estimated FX" as accounting truth.
-- It should not require regular manual nudging to stay correct.
-- It should not hide uncertainty behind optimistic UI.
+    W --> DB
+    DB --> M[SQLAlchemy models + Alembic migrations]
+```
 
-## Current Domain Model
+The deployed app intentionally targets low-cost infrastructure:
 
-The current implementation is RUB-first after the `CUTOVER_DATE`:
+- **UI/runtime:** Streamlit Community Cloud
+- **database:** Turso / libSQL
+- **ORM/migrations:** SQLAlchemy + Alembic
+- **validation/config:** Pydantic
+- **historical FX:** CurrencyBeacon
 
-- Spotify subscription price is configured in USD.
-- Monthly posted charges are locked in RUB using a historical FX rate.
-- Member payments are recorded in RUB.
-- Member balances are derived from opening balance, posted charges, and payments.
+Because Streamlit Community Cloud may sleep between visits, correctness after wake-up matters more than always-on background processing.
 
-That direction is correct. The next step is to make the implementation more explicit, more reliable after sleep/wake cycles, and more transparent for members.
+## Reliability behavior
 
-## V2 Direction
+The read path is integrity-gated before balances or statements are shown. A stale but previously valid ledger can remain readable, while ordinary financial writes are disabled until reconciliation becomes healthy again.
 
-The current v2 implementation is a small ledger centered on:
+Read-heavy screens use caching to reduce remote database latency. Reconciliation runs once per session and preserves locked historical FX rather than recalculating old months from current rates.
 
-- **members**
-- **posted monthly cycles**
-- **locked member charges**
-- **RUB payments**
-- **reconciliation runs**
+The current product has three main views:
 
-The system now behaves like a tiny receivables ledger with Spotify-specific automation, not like a generic admin console.
+- **Home:** ledger health, balances, and recent payments
+- **Statements:** per-member charge/payment history
+- **Admin:** member management, payment entry, adjustments, and reconciliation controls
 
-See [docs/v2_blueprint.md](/home/abocha/code/spotify-family-ledger/docs/v2_blueprint.md) for the concrete v2 architecture and workflow.
+For the detailed system design, see [docs/v2_blueprint.md](docs/v2_blueprint.md). Additional notes live in [docs/design.md](docs/design.md) and [docs/fx_strategy.md](docs/fx_strategy.md).
 
-## Current Implementation
+## Local development
 
-The current app is live and built around three pages:
+Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 
-- **Home**: public health/status, balances, and recent payments
-- **Statements**: public per-member statement view with explicit member selection
-- **Admin**: admin-only member management, payment entry, adjustments, and manual reconciliation retry
+Install the locked environment:
 
-Important implementation details:
+```bash
+uv sync --frozen
+```
 
-- navigation uses Streamlit `st.navigation` / `st.Page`
-- startup reconciliation runs once per session and caches its result
-- balances and statements are integrity-gated before being shown
-- read models use `st.cache_data`
-- stale ledgers remain readable, but normal financial writes are disabled until healthy again
-- query paths have been optimized for remote latency on Streamlit Cloud + Turso
+Create a local `.env`:
 
-## Setup
+```env
+TURSO_URL=sqlite:///local.db
+TURSO_KEY=
+SUBSCRIPTION_USD=8.00
+CUTOVER_DATE=2026-04-20
+CURRENCYBEACON_API_KEY=your_key_here
+```
 
-### Local Development
+`ADMIN_PASSWORD_HASH` is optional for public local browsing and required for admin mode.
 
-1. Install dependencies
-   ```bash
-   uv sync
-   ```
+Initialize the database:
 
-2. Configure environment
-   Create a `.env` file with at least:
-   ```env
-   TURSO_URL=sqlite:///local.db
-   TURSO_KEY=
-   SUBSCRIPTION_USD=8.00
-   CUTOVER_DATE=2026-04-20
-   CURRENCYBEACON_API_KEY=your_key_here
-   ```
+```bash
+uv run alembic upgrade head
+```
 
-   Notes:
-   - `TURSO_URL` can point to local SQLite or a remote libSQL/Turso database.
-   - `EXCHANGERATE_API_KEY` is still accepted as a temporary fallback during migration, but new setups should use `CURRENCYBEACON_API_KEY`.
-   - `ADMIN_PASSWORD_HASH` is optional for local public browsing, but required if you want local admin mode.
+Optionally seed a fresh local database:
 
-3. Initialize database
-   ```bash
-   uv run alembic upgrade head
-   ```
+```bash
+uv run python scripts/seed_from_scratch.py
+```
 
-4. Optional: seed a fresh local database
-   ```bash
-   uv run python scripts/seed_from_scratch.py
-   ```
+Run the app:
 
-5. Run the app
-   ```bash
-   uv run streamlit run app.py
-   ```
+```bash
+uv run streamlit run app.py
+```
 
-### Streamlit Community Cloud Deployment
+## Validation
 
-1. Create a Streamlit Community Cloud app with `app.py` as the entry point.
+```bash
+uv run pytest tests/
+uv run ruff check .
+uv run ty check .
+```
 
-2. Configure secrets:
-   ```toml
-   TURSO_URL = "your_turso_url"
-   TURSO_KEY = "your_turso_key"
-   SUBSCRIPTION_USD = "8.00"
-   CUTOVER_DATE = "2026-04-20"
-   CURRENCYBEACON_API_KEY = "your_key_here"
-   ADMIN_PASSWORD_HASH = "your_bcrypt_hash_here"
-   ```
+CI runs the same test and static-analysis checks on pushes and pull requests.
 
-   Optional but recommended:
-   ```toml
-   TELEGRAM_BOT_TOKEN = "your_bot_token"
-   TELEGRAM_CHAT_ID = "your_chat_id"
-   ```
+## Deployment
 
-3. Ensure the database schema has been migrated before deployment:
-   ```bash
-   uv run alembic upgrade head
-   ```
+For Streamlit Community Cloud, use `app.py` as the entry point and configure the runtime secrets in the app settings:
 
-4. Seed or import real members and opening balances before first real use.
+```toml
+TURSO_URL = "your_turso_url"
+TURSO_KEY = "your_turso_key"
+SUBSCRIPTION_USD = "8.00"
+CUTOVER_DATE = "2026-04-20"
+CURRENCYBEACON_API_KEY = "your_key_here"
+ADMIN_PASSWORD_HASH = "your_bcrypt_hash_here"
+```
 
-## Development Commands
+Optional Telegram notification credentials are supported through `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
 
-- Sync environment: `uv sync`
-- Database migrations: `uv run alembic upgrade head`
-- Static analysis: `uv run ruff check . --fix && uv run ty check .`
-- Tests: `uv run pytest tests/`
-- Run app: `uv run streamlit run app.py`
+Apply database migrations before first use:
+
+```bash
+uv run alembic upgrade head
+```
